@@ -25,17 +25,21 @@
                 "value": "x64",
                 "strategy": "external"
             },
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug",
+            "CMAKE_TOOLCHAIN_FILE": "D:/IDE/vcpkg/scripts/buildsystems/vcpkg.cmake",
+            "VCPKG_TARGET_TRIPLET": "x64-windows"
+          }
         },
         {
             "name": "x64-release",
             "displayName": "x64 Release",
             "inherits": "x64-debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
+          "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_TOOLCHAIN_FILE": "D:/IDE/vcpkg/scripts/buildsystems/vcpkg.cmake",
+            "VCPKG_TARGET_TRIPLET": "x64-windows"
+          }
         },
         {
             "name": "x86-debug",
