@@ -19,7 +19,7 @@ int imwrite_mdy_private(cv::InputArray input, const std::string file_name)
     std::ostringstream oss;
     oss << std::put_time(&now_tm, "%Y%m%d_%H%M%S_") << now.time_since_epoch().count() << std::string("_");
 
-    std::string output_file_name = std::string("C:\\Users\\Belfast\\OneDrive\\Desktop\\result\\") + oss.str() + file_name + std::string(".png");
+    std::string output_file_name = std::string("C:\\Users\\Belfast\\Desktop\\result\\") + oss.str() + file_name + std::string(".png");
 
     std::cout << output_file_name << std::endl;
     cv::imwrite(output_file_name, src);
@@ -125,7 +125,7 @@ cv::Mat retinex_enhance(const cv::Mat& src, double sigma)
     return result;
 }
 
-int main()
+int rgb2png()
 {
     //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_15-46-24";
     std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_16-04-05";
@@ -150,4 +150,103 @@ int main()
     }
 
 	return 0;
+}
+
+// 线性映射函数，将14位图像映射到8位图像
+int linear_mapping(cv::InputArray input, cv::OutputArray output)
+{
+    cv::Mat img14bit = input.getMat().clone();
+    CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
+
+    double minVal, maxVal;
+    cv::minMaxLoc(img14bit, &minVal, &maxVal);
+
+    cv::Mat img8bit;
+    img14bit.convertTo(img8bit, CV_8U, 255.0 / (maxVal - minVal), -minVal * 255.0 / (maxVal - minVal));//饱和溢出保护
+
+	output.assign(img8bit);
+
+    return 0;
+}
+
+// 百分位映射函数，将14位图像映射到8位图像，使用指定的低百分位和高百分位进行线性映射
+int percentile_mapping(cv::InputArray input, cv::OutputArray output, double lowPct = 0.5, double highPct = 99.5)
+{
+    cv::Mat img14bit = input.getMat().clone();
+    CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
+
+    // 计算百分位
+    cv::Mat flat = img14bit.reshape(1, 1);
+    cv::Mat sorted;
+    cv::sort(flat, sorted, cv::SORT_ASCENDING);
+
+    int lowIdx = static_cast<int>(sorted.cols * lowPct / 100.0);
+    int highIdx = static_cast<int>(sorted.cols * highPct / 100.0);
+    double pLow = sorted.at<uint16_t>(0, lowIdx);
+    double pHigh = sorted.at<uint16_t>(0, highIdx);
+
+    cv::Mat clipped;
+    cv::threshold(img14bit, clipped, pHigh, pHigh, cv::THRESH_TRUNC);
+    cv::Mat clipped2;
+    cv::max(clipped, pLow, clipped2);
+
+    cv::Mat img8bit;
+    clipped2.convertTo(img8bit, CV_8U, 255.0 / (pHigh - pLow), -pLow * 255.0 / (pHigh - pLow));
+
+	output.assign(img8bit);
+    return 0;
+}
+
+// CLAHE映射函数，将14位图像映射到8位图像，使用CLAHE进行局部对比度增强
+int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 2.0, cv::Size tileSize = { 8, 8 })
+{
+    cv::Mat img14bit = input.getMat().clone();
+    CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
+
+    // 先线性压到16bit（CLAHE支持16bit）
+    cv::Mat img16bit;
+    img14bit.convertTo(img16bit, CV_16U, 65535.0 / 16383.0);
+
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clipLimit, tileSize);
+    cv::Mat result;
+    clahe->apply(img16bit, result);
+
+    // 再压到8bit
+    cv::Mat img8bit;
+    result.convertTo(img8bit, CV_8U, 255.0 / 65535.0);
+
+	output.assign(img8bit);
+    return 0;
+}
+
+int gammaMapping(cv::InputArray input, cv::OutputArray output, double gamma = 0.5)
+{
+    cv::Mat img14bit = input.getMat().clone();
+    CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
+
+    cv::Mat normalized;
+    img14bit.convertTo(normalized, CV_32F, 1.0 / 16383.0);
+
+    cv::Mat corrected;
+    cv::pow(normalized, gamma, corrected);
+
+    cv::Mat img8bit;
+    corrected.convertTo(img8bit, CV_8U, 255.0);
+
+	output.assign(img8bit);
+    return 0;
+}
+
+int main()
+{
+    // rgb2png();
+    // 测试retinex增强
+    cv::Mat src = cv::imread("C:/Users/Belfast/Desktop/before_mapping/2026-03-02_16-04-05/20260302_160405_000000.raw.png");
+    if (src.empty()) {
+        std::cerr << "无法读取图像" << std::endl;
+        return -1;
+    }
+    cv::Mat enhanced = retinex_enhance(src, 15.0);
+    imwrite_mdy_private(enhanced, "retinex_enhanced");
+    return 0;
 }
