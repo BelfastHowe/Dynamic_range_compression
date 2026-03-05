@@ -152,6 +152,109 @@ int rgb2png()
 	return 0;
 }
 
+// 直方图显示配置结构体
+struct HistDisplayConfig
+{
+    int    histW = 1024;          // 显示窗口宽度
+    int    histH = 576;          // 显示窗口高度
+    int    binCount = 256;          // 直方图 bin 数量
+    cv::Scalar barColor = cv::Scalar(200, 200, 200);  // 柱状颜色
+    cv::Scalar bgColor = cv::Scalar(30, 30, 30);   // 背景颜色
+    cv::Scalar axisColor = cv::Scalar(180, 180, 180);  // 坐标轴颜色
+    bool   logScale = false;        // 是否对数纵轴
+    std::string winName = "Histogram"; // 窗口名称
+};
+
+// 显示单通道图像的直方图，支持8位和16位图像
+int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {})
+{
+	cv::Mat img = input.getMat().clone();
+
+    if (img.channels() != 1)
+        return -1;
+    if (img.depth() != CV_8U && img.depth() != CV_16U)
+        return -1;
+
+    // Step 1: 计算直方图
+    float rangeMax = (img.depth() == CV_8U) ? 256.0f : 65536.0f;
+    float ranges[] = { 0, rangeMax };
+    const float* histRange = { ranges };
+    int binCount = cfg.binCount;
+
+    cv::Mat hist;
+    cv::calcHist(&img, 1, nullptr, cv::Mat(), hist, 1, &binCount, &histRange);
+
+    // Step 2: 对数纵轴（可选）
+    if (cfg.logScale) {
+        cv::log(hist + 1.0f, hist);
+    }
+
+    // Step 3: 归一化到画布高度
+    cv::normalize(hist, hist, 0, cfg.histH - 20, cv::NORM_MINMAX);
+
+    // Step 4: 绘制画布
+    cv::Mat canvas(cfg.histH, cfg.histW, CV_8UC3, cfg.bgColor);
+
+    int binW = cfg.histW / binCount;
+    for (int i = 0; i < binCount; i++)
+    {
+        int barH = static_cast<int>(hist.at<float>(i));
+        cv::rectangle(
+            canvas,
+            cv::Point(i * binW, cfg.histH - barH),
+            cv::Point((i + 1) * binW - 1, cfg.histH - 1),
+            cfg.barColor,
+            cv::FILLED
+        );
+    }
+
+    // Step 5: 坐标轴
+    // x 轴
+    cv::line(canvas,
+        cv::Point(0, cfg.histH - 1),
+        cv::Point(cfg.histW - 1, cfg.histH - 1),
+        cfg.axisColor, 1);
+    // y 轴
+    cv::line(canvas,
+        cv::Point(0, 0),
+        cv::Point(0, cfg.histH - 1),
+        cfg.axisColor, 1);
+
+    // Step 6: 刻度标注
+    int tickCount = 4;
+    for (int i = 0; i <= tickCount; i++)
+    {
+        int x = i * (cfg.histW - 1) / tickCount;
+        float val = i * rangeMax / tickCount;
+
+        // 刻度线
+        cv::line(canvas,
+            cv::Point(x, cfg.histH - 1),
+            cv::Point(x, cfg.histH - 5),
+            cfg.axisColor, 1);
+
+        // 刻度标签
+        std::string label = (val >= 1000)
+            ? std::to_string(static_cast<int>(val / 1000)) + "k"
+            : std::to_string(static_cast<int>(val));
+        cv::putText(canvas, label,
+            cv::Point(x + 2, cfg.histH - 6),
+            cv::FONT_HERSHEY_PLAIN, 0.7, cfg.axisColor, 1);
+    }
+
+    // 深度标注
+    std::string depthLabel = (img.depth() == CV_8U) ? "8bit" : "16bit";
+    if (cfg.logScale) depthLabel += " (log)";
+    cv::putText(canvas, depthLabel,
+        cv::Point(cfg.histW - 55, 15),
+        cv::FONT_HERSHEY_PLAIN, 0.9, cfg.axisColor, 1);
+
+    cv::imshow(cfg.winName, canvas);
+    cv::waitKey();
+
+    return 0;
+}
+
 // 线性映射函数，将14位图像映射到8位图像
 int linear_mapping(cv::InputArray input, cv::OutputArray output)
 {
@@ -197,6 +300,63 @@ int percentile_mapping(cv::InputArray input, cv::OutputArray output, double lowP
     return 0;
 }
 
+// 16UC1图像的直方图均衡化函数
+int equalize_hist_16UC1(cv::InputArray input, cv::OutputArray output, double maxVal = 65535.0)
+{
+    cv::Mat src = input.getMat().clone();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    int binCount = static_cast<int>(maxVal) + 1;
+    int totalPixels = src.rows * src.cols;
+
+    // Step 1: 统计直方图
+    std::vector<int> hist(binCount, 0);
+    src.forEach<uint16_t>([&](uint16_t val, const int*)
+        {
+        hist[val]++;
+        });
+
+    // Step 2: 计算 CDF
+    std::vector<int> cdf(binCount, 0);
+    cdf[0] = hist[0];
+    for (int i = 1; i < binCount; i++)
+    {
+        cdf[i] = cdf[i - 1] + hist[i];
+    }
+
+    int cdfMin = 0;
+    for (int i = 0; i < binCount; i++)
+    {
+        if (cdf[i] > 0)
+        { 
+            cdfMin = cdf[i];
+            break;
+        }
+    }
+
+    // Step 3: 构建 LUT
+    std::vector<uint16_t> lut(binCount, 0);
+    for (int i = 0; i < binCount; i++)
+    {
+        if (cdf[i] > 0)
+        {
+            lut[i] = static_cast<uint16_t>(
+                std::round(static_cast<double>(cdf[i] - cdfMin) / (totalPixels - cdfMin) * maxVal)
+                );
+        }
+    }
+
+    // Step 4: 应用映射
+    cv::Mat dst = cv::Mat::zeros(src.size(), src.type());
+    src.forEach<uint16_t>([&](uint16_t val, const int* pos)
+        {
+        dst.at<uint16_t>(pos[0], pos[1]) = lut[val];
+        });
+
+    output.assign(dst);
+    return 0;
+}
+
 // CLAHE映射函数，将14位图像映射到8位图像，使用CLAHE进行局部对比度增强
 int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 2.0, cv::Size tileSize = { 8, 8 })
 {
@@ -213,13 +373,14 @@ int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit
 
     // 再压到8bit
     cv::Mat img8bit;
-    result.convertTo(img8bit, CV_8U, 255.0 / 65535.0);
+    //result.convertTo(img8bit, CV_8U, 255.0 / 65535.0);
+	linear_mapping(result, img8bit);
 
 	output.assign(img8bit);
     return 0;
 }
 
-int gammaMapping(cv::InputArray input, cv::OutputArray output, double gamma = 0.5)
+int gamma_transform_16UC1(cv::InputArray input, cv::OutputArray output, double gamma = 0.5)
 {
     cv::Mat img14bit = input.getMat().clone();
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
@@ -230,23 +391,45 @@ int gammaMapping(cv::InputArray input, cv::OutputArray output, double gamma = 0.
     cv::Mat corrected;
     cv::pow(normalized, gamma, corrected);
 
-    cv::Mat img8bit;
-    corrected.convertTo(img8bit, CV_8U, 255.0);
+    cv::Mat dst;
+    corrected.convertTo(dst, CV_16U, 16383.0);
 
-	output.assign(img8bit);
+	output.assign(dst);
     return 0;
 }
 
 int main()
 {
-    // rgb2png();
-    // 测试retinex增强
-    cv::Mat src = cv::imread("C:/Users/Belfast/Desktop/before_mapping/2026-03-02_16-04-05/20260302_160405_000000.raw.png");
-    if (src.empty()) {
+    std::string image_path = std::string(IMAGE_DIR) + "19700101_000143_533.png";
+
+    cv::Mat src = cv::imread(image_path, cv::IMREAD_UNCHANGED);
+    if (src.empty())
+    {
         std::cerr << "无法读取图像" << std::endl;
         return -1;
     }
-    cv::Mat enhanced = retinex_enhance(src, 15.0);
-    imwrite_mdy_private(enhanced, "retinex_enhanced");
+
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    cv::imshow("原始图像", src);
+
+    HistDisplayConfig histcfg_src;
+	histcfg_src.winName = "原始图像直方图";
+	histcfg_src.logScale = true;
+    histcfg_src.binCount = 512;
+	showHistogram(src, histcfg_src);
+
+    cv::Mat dst_CLAHE;
+    clahe_mapping(src, dst_CLAHE);
+
+	HistDisplayConfig histcfg_clahe;
+	histcfg_clahe.winName = "CLAHE图像直方图";
+	histcfg_clahe.logScale = true;
+	histcfg_clahe.binCount = 512;
+	showHistogram(dst_CLAHE, histcfg_clahe);
+
+    //cv::Mat enhanced = retinex_enhance(src, 15.0);
+    imwrite_mdy_private(dst_CLAHE, "CLAHE");
+
     return 0;
 }

@@ -3,6 +3,8 @@
 #
 cmake_minimum_required (VERSION 3.10)
 
+cmake_policy(SET CMP0074 NEW)
+
 # 如果支持，请为 MSVC 编译器启用热重载。
 if (POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
@@ -13,3 +15,5 @@ project ("Dynamic_range_compression")
 
 # 包含子项目。
 add_subdirectory ("Dynamic_range_compression")
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/original_image/")
