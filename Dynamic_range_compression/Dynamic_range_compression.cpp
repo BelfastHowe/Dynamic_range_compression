@@ -250,7 +250,7 @@ int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {})
         cv::FONT_HERSHEY_PLAIN, 0.9, cfg.axisColor, 1);
 
     cv::imshow(cfg.winName, canvas);
-    cv::waitKey();
+    cv::waitKey(1);
 
     return 0;
 }
@@ -411,7 +411,7 @@ int main()
 
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-    cv::imshow("原始图像", src);
+    //cv::imshow("原始图像", src);
 
     HistDisplayConfig histcfg_src;
 	histcfg_src.winName = "原始图像直方图";
@@ -419,17 +419,31 @@ int main()
     histcfg_src.binCount = 512;
 	showHistogram(src, histcfg_src);
 
+
+	cv::Mat dst_linear;
+	linear_mapping(src, dst_linear);
+
+	cv::imshow("线性映射图像", dst_linear);
+
+	HistDisplayConfig histcfg_linear;
+	histcfg_linear.winName = "线性映射图像直方图";
+	histcfg_linear.logScale = true;
+	showHistogram(dst_linear, histcfg_linear);
+
+
     cv::Mat dst_CLAHE;
-    clahe_mapping(src, dst_CLAHE);
+	clahe_mapping(src, dst_CLAHE, 2.0, cv::Size(8, 8));
+
+	cv::imshow("CLAHE映射图像", dst_CLAHE);
 
 	HistDisplayConfig histcfg_clahe;
 	histcfg_clahe.winName = "CLAHE图像直方图";
 	histcfg_clahe.logScale = true;
-	histcfg_clahe.binCount = 512;
-	showHistogram(dst_CLAHE, histcfg_clahe);
+    showHistogram(dst_CLAHE, histcfg_clahe);
 
     //cv::Mat enhanced = retinex_enhance(src, 15.0);
     imwrite_mdy_private(dst_CLAHE, "CLAHE");
 
+	cv::waitKey(0);
     return 0;
 }
