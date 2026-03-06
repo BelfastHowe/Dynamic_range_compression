@@ -16,4 +16,4 @@ project ("Dynamic_range_compression")
 # 包含子项目。
 add_subdirectory ("Dynamic_range_compression")
 
-target_compile_definitions(${PROJECT_NAME} PRIVATE IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/original_image/")
+target_compile_definitions(${PROJECT_NAME} PRIVATE IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/original_image")

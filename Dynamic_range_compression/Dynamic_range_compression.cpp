@@ -398,52 +398,146 @@ int gamma_transform_16UC1(cv::InputArray input, cv::OutputArray output, double g
     return 0;
 }
 
-int main()
+// 根据局部图像的梯度计算权重图，梯度越大权重越高，使用Sigmoid函数映射为0-1之间的权重值，并进行高斯平滑
+int computeWeightByGradient(cv::InputArray localImg, cv::OutputArray weight_map, double k = 1.0)
 {
-    std::string image_path = std::string(IMAGE_DIR) + "19700101_000143_533.png";
+	cv::Mat local = localImg.getMat().clone();
+	CV_CheckTypeEQ(local.type(), CV_8UC1, "");
 
-    cv::Mat src = cv::imread(image_path, cv::IMREAD_UNCHANGED);
-    if (src.empty())
+    // Step 1: 计算梯度幅值
+    cv::Mat gradX, gradY;
+    cv::Sobel(local, gradX, CV_32F, 1, 0, 3);
+    cv::Sobel(local, gradY, CV_32F, 0, 1, 3);
+
+    cv::Mat gradMag;
+    cv::magnitude(gradX, gradY, gradMag);
+
+    // Step 2: 归一化到 [0, 1]
+    cv::Mat gradMagNorm;
+    cv::normalize(gradMag, gradMagNorm, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
+
+    // Step 3: Sigmoid 映射为权重
+    // weight = 1 / (1 + exp(-k * (x - 0.5)))
+    cv::Mat exponent = -k * (gradMagNorm - 0.5);
+    cv::exp(exponent, exponent);
+    cv::Mat weightMap = 1.0 / (1.0 + exponent);
+
+    // Step 4: 高斯平滑
+    cv::GaussianBlur(weightMap, weightMap, cv::Size(5, 5), 1.0);
+
+	weight_map.assign(weightMap);
+    return 0;
+}
+
+// 全局局部自适应融合函数，根据局部图像的梯度计算权重图，将全局映射图和局部映射图进行加权融合，得到最终的增强图像
+int global_local_adaptive_fusion(cv::InputArray input, cv::OutputArray output)
+{
+    cv::Mat src = input.getMat().clone();
+	CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+	cv::Mat img_global;
+	cv::Mat img_local;
+
+    linear_mapping(src, img_global);
+	clahe_mapping(src, img_local, 2.0, cv::Size(8, 8));
+
+	cv::Mat weightMap;
+	computeWeightByGradient(img_local, weightMap, 10.0);
+
+	cv::Mat globalFloat, localFloat;
+    img_global.convertTo(globalFloat, CV_32F);
+	img_local.convertTo(localFloat, CV_32F);
+
+	cv::Mat fusedFloat = globalFloat.mul(1.0 - weightMap) + localFloat.mul(weightMap);
+
+    cv::Mat dst;
+	fusedFloat.convertTo(dst, CV_8U);
+
+    output.assign(dst);
+	return 0;
+}
+
+int Test_all_methods()
+{
+    //std::string image_path = std::string(IMAGE_DIR) + "/19700101_000143_533.png";
+
+    fs::path inputDir(IMAGE_DIR);
+
+    if (!fs::exists(inputDir))
     {
-        std::cerr << "无法读取图像" << std::endl;
+        std::cerr << "Input directory not found: " << IMAGE_DIR << std::endl;
         return -1;
     }
 
-    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+    for (const auto& entry : fs::directory_iterator(inputDir))
+    {
+        // 过滤 png 文件
+        if (!entry.is_regular_file() || entry.path().extension() != ".png")
+            continue;
 
-    //cv::imshow("原始图像", src);
+        cv::Mat src = cv::imread(entry.path().string(), cv::IMREAD_UNCHANGED);
+        if (src.empty())
+        {
+            std::cerr << "Failed to read: " << entry.path() << std::endl;
+            continue;
+        }
 
-    HistDisplayConfig histcfg_src;
-	histcfg_src.winName = "原始图像直方图";
-	histcfg_src.logScale = true;
-    histcfg_src.binCount = 512;
-	showHistogram(src, histcfg_src);
+        // 处理图像
+        CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+        //cv::imshow("原始图像", src);
+
+        HistDisplayConfig histcfg_src;
+        histcfg_src.winName = "原始图像直方图";
+        histcfg_src.logScale = true;
+        histcfg_src.binCount = 512;
+        showHistogram(src, histcfg_src);
 
 
-	cv::Mat dst_linear;
-	linear_mapping(src, dst_linear);
+        cv::Mat dst_linear;
+        linear_mapping(src, dst_linear);
 
-	cv::imshow("线性映射图像", dst_linear);
+        cv::imshow("线性映射图像", dst_linear);
 
-	HistDisplayConfig histcfg_linear;
-	histcfg_linear.winName = "线性映射图像直方图";
-	histcfg_linear.logScale = true;
-	showHistogram(dst_linear, histcfg_linear);
+        HistDisplayConfig histcfg_linear;
+        histcfg_linear.winName = "线性映射图像直方图";
+        histcfg_linear.logScale = true;
+        showHistogram(dst_linear, histcfg_linear);
+
+        imwrite_mdy_private(dst_linear, "Linear");
 
 
-    cv::Mat dst_CLAHE;
-	clahe_mapping(src, dst_CLAHE, 2.0, cv::Size(8, 8));
+        cv::Mat dst_CLAHE;
+        clahe_mapping(src, dst_CLAHE, 2.0, cv::Size(8, 8));
 
-	cv::imshow("CLAHE映射图像", dst_CLAHE);
+        cv::imshow("CLAHE映射图像", dst_CLAHE);
 
-	HistDisplayConfig histcfg_clahe;
-	histcfg_clahe.winName = "CLAHE图像直方图";
-	histcfg_clahe.logScale = true;
-    showHistogram(dst_CLAHE, histcfg_clahe);
+        HistDisplayConfig histcfg_clahe;
+        histcfg_clahe.winName = "CLAHE图像直方图";
+        histcfg_clahe.logScale = true;
+        showHistogram(dst_CLAHE, histcfg_clahe);
 
-    //cv::Mat enhanced = retinex_enhance(src, 15.0);
-    imwrite_mdy_private(dst_CLAHE, "CLAHE");
+        //cv::Mat enhanced = retinex_enhance(src, 15.0);
+        imwrite_mdy_private(dst_CLAHE, "CLAHE");
 
-	cv::waitKey(0);
+
+        cv::Mat dst_GLAF;
+        global_local_adaptive_fusion(src, dst_GLAF);
+
+        cv::imshow("全局局部自适应融合图像", dst_GLAF);
+        imwrite_mdy_private(dst_GLAF, "GLAF");
+
+
+        std::cout << "Processed: " << entry.path().filename() << std::endl;
+        cv::waitKey(0);
+    }
+
+    return 0;
+}
+
+int main()
+{
+    Test_all_methods();
+
     return 0;
 }
