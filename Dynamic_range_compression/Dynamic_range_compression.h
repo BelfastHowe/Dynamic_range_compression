@@ -21,5 +21,8 @@ int percentile_mapping(cv::InputArray input, cv::OutputArray output, double lowP
 
 int benchmark_main();
 
+// 计算图像的信息熵，输入为单通道8位图像，输出为熵值（最大值为8，均匀分布时达到最大）
+double calcEntropy(cv::InputArray src);
+
 
 // TODO: 在此处引用程序需要的其他标头。

@@ -633,6 +633,9 @@ int Test_single_method()
         return -1;
     }
 
+	double entropy = 0.0;
+	int imageCount = 0;
+
     for (const auto& entry : fs::directory_iterator(inputDir))
     {
         // 过滤 png 文件
@@ -673,8 +676,16 @@ int Test_single_method()
 		dde_enhance(src, dst_DDE);
 		imwrite_mdy_private(dst_DDE, "DDE");
 
+		entropy += calcEntropy(dst_DDE);
+		imageCount++;
+
         cv::waitKey(1);
     }
+
+    if (imageCount > 0)
+    {
+        std::cout << "Average Entropy: " << entropy / imageCount << std::endl;
+	}
 
     return 0;
 }
@@ -762,9 +773,9 @@ int Test_all_methods()
 int main()
 {
     //Test_all_methods();
-    //Test_single_method();
+    Test_single_method();
 
-    benchmark_main();
+    //benchmark_main();
 
     return 0;
 }
@@ -840,4 +851,30 @@ int benchmark_main()
     }
 
     return 0;
+}
+
+double calcEntropy(cv::InputArray src)
+{
+    cv::Mat img = src.getMat();
+    CV_CheckTypeEQ(img.type(), CV_8UC1, "");
+
+    // 计算直方图
+    int histSize = 256;
+    float range[] = { 0, 256 };
+    const float* histRange = range;
+    cv::Mat hist;
+    cv::calcHist(&img, 1, nullptr, cv::Mat(), hist, 1, &histSize, &histRange);
+
+    // 归一化为概率
+    hist /= img.total();
+
+    // H = -sum(p * log2(p))
+    double entropy = 0.0;
+    for (int i = 0; i < histSize; i++)
+    {
+        float p = hist.at<float>(i);
+        if (p > 0)
+            entropy -= p * std::log2(p);
+    }
+    return entropy;  // 最大值为 8（均匀分布）
 }
