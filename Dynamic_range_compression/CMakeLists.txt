@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 将源代码添加到此项目的可执行文件。
-add_executable (Dynamic_range_compression "Dynamic_range_compression.cpp" "Dynamic_range_compression.h")
+add_executable (Dynamic_range_compression "Dynamic_range_compression.cpp" "Dynamic_range_compression.h" "quantitative_assessment.cpp" "quantitative_assessment.h")
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET Dynamic_range_compression PROPERTY CXX_STANDARD 20)

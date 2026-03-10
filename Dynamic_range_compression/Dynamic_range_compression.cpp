@@ -2,6 +2,7 @@
 //
 
 #include "Dynamic_range_compression.h"
+#include "quantitative_assessment.h"
 
 namespace fs = std::filesystem;
 using Ms = std::chrono::duration<double, std::milli>;
@@ -103,7 +104,7 @@ int single_scale_retinex(cv::InputArray input, cv::OutputArray output, double si
     cv::Mat src = input.getMat().clone();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-	// 归一化到0-1
+    // 归一化到0-1
     cv::Mat src_normal;
     cv::normalize(src, src_normal, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
     src_normal += 1.0f;
@@ -116,11 +117,11 @@ int single_scale_retinex(cv::InputArray input, cv::OutputArray output, double si
     cv::Mat gauss;
     cv::GaussianBlur(src_normal, gauss, cv::Size(0, 0), sigma);
 
-	cv::Mat log_blur;
-	cv::log(gauss, log_blur);
+    cv::Mat log_blur;
+    cv::log(gauss, log_blur);
 
     // 计算反射分量
-	cv::Mat log_reflectance = log_src - log_blur;
+    cv::Mat log_reflectance = log_src - log_blur;
 
     // 指数还原
     /*cv::Mat reflectance;
@@ -130,7 +131,7 @@ int single_scale_retinex(cv::InputArray input, cv::OutputArray output, double si
     cv::Mat result;
     cv::normalize(log_reflectance, result, 0, 255, cv::NORM_MINMAX, CV_8U);
 
-	output.assign(result);
+    output.assign(result);
     return 0;
 }
 
@@ -162,7 +163,7 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
         cv::Mat log_re = log_src - log_blur;
 
         // 累加反射分量
-		log_reflectance += log_re;
+        log_reflectance += log_re;
     }
 
     log_reflectance /= static_cast<float>(sigmas.size());
@@ -172,10 +173,10 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
     /*cv::normalize(log_reflectance, result, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
 
     cv::Mat gamma;
-	cv::pow(result, 2, gamma);
-	cv::normalize(gamma, result, 0, 255, cv::NORM_MINMAX, CV_8U);*/
+    cv::pow(result, 2, gamma);
+    cv::normalize(gamma, result, 0, 255, cv::NORM_MINMAX, CV_8U);*/
 
-	cv::normalize(log_reflectance, result, 0, 65535, cv::NORM_MINMAX, CV_16U);
+    cv::normalize(log_reflectance, result, 0, 65535, cv::NORM_MINMAX, CV_16U);
     percentile_mapping(result, result, 0.25, 99.75);
 
     output.assign(result);
@@ -206,7 +207,7 @@ int rgb2png()
         }
     }
 
-	return 0;
+    return 0;
 }
 
 // 直方图显示配置结构体
@@ -225,7 +226,7 @@ struct HistDisplayConfig
 // 显示单通道图像的直方图，支持8位和16位图像
 int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {})
 {
-	cv::Mat img = input.getMat().clone();
+    cv::Mat img = input.getMat().clone();
 
     if (img.channels() != 1)
         return -1;
@@ -312,7 +313,7 @@ int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {})
     return 0;
 }
 
-// 线性映射函数，将14位图像映射到8位图像
+
 int linear_mapping(cv::InputArray input, cv::OutputArray output)
 {
     cv::Mat img14bit = input.getMat().clone();
@@ -324,7 +325,7 @@ int linear_mapping(cv::InputArray input, cv::OutputArray output)
     cv::Mat img8bit;
     img14bit.convertTo(img8bit, CV_8U, 255.0 / (maxVal - minVal), -minVal * 255.0 / (maxVal - minVal));//饱和溢出保护
 
-	output.assign(img8bit);
+    output.assign(img8bit);
 
     return 0;
 }
@@ -353,7 +354,7 @@ int percentile_mapping(cv::InputArray input, cv::OutputArray output, double lowP
     cv::Mat img8bit;
     clipped2.convertTo(img8bit, CV_8U, 255.0 / (pHigh - pLow), -pLow * 255.0 / (pHigh - pLow));
 
-	output.assign(img8bit);
+    output.assign(img8bit);
     return 0;
 }
 
@@ -414,7 +415,7 @@ int equalize_hist_16UC1(cv::InputArray input, cv::OutputArray output, double max
     return 0;
 }
 
-// CLAHE映射函数，将14位图像映射到8位图像，使用CLAHE进行局部对比度增强
+
 int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 2.0, cv::Size tileSize = { 8, 8 })
 {
     cv::Mat img14bit = input.getMat().clone();
@@ -427,7 +428,7 @@ int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit
     cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clipLimit, tileSize);
     clahe->apply(img8bit, dst);
 
-	output.assign(dst);
+    output.assign(dst);
     return 0;
 }
 
@@ -454,7 +455,7 @@ int gamma_transform_16UC1(cv::InputArray input, cv::OutputArray output, double g
 
     cv::Mat normalized;
     //img14bit.convertTo(normalized, CV_32F, 1.0 / 65535.0);
-	cv::normalize(img14bit, normalized, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
+    cv::normalize(img14bit, normalized, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
 
     cv::Mat corrected;
     cv::pow(normalized, gamma, corrected);
@@ -462,15 +463,15 @@ int gamma_transform_16UC1(cv::InputArray input, cv::OutputArray output, double g
     cv::Mat dst;
     corrected.convertTo(dst, CV_16U, 65535.0);
 
-	output.assign(dst);
+    output.assign(dst);
     return 0;
 }
 
 // 根据局部图像的梯度计算权重图，梯度越大权重越高，使用Sigmoid函数映射为0-1之间的权重值，并进行高斯平滑
 int computeWeightByGradient(cv::InputArray localImg, cv::OutputArray weight_map, double k = 1.0)
 {
-	cv::Mat local = localImg.getMat().clone();
-	CV_CheckTypeEQ(local.type(), CV_8UC1, "");
+    cv::Mat local = localImg.getMat().clone();
+    CV_CheckTypeEQ(local.type(), CV_8UC1, "");
 
     // Step 1: 计算梯度幅值
     cv::Mat gradX, gradY;
@@ -493,43 +494,43 @@ int computeWeightByGradient(cv::InputArray localImg, cv::OutputArray weight_map,
     // Step 4: 高斯平滑
     cv::GaussianBlur(weightMap, weightMap, cv::Size(5, 5), 1);
 
-	weight_map.assign(weightMap);
+    weight_map.assign(weightMap);
     return 0;
 }
 
-// 全局局部自适应融合函数，根据局部图像的梯度计算权重图，将全局映射图和局部映射图进行加权融合，得到最终的增强图像
+
 int global_local_adaptive_fusion(cv::InputArray input, cv::OutputArray output)
 {
     cv::Mat src = input.getMat().clone();
-	CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-	cv::Mat img_global;
-	cv::Mat img_local;
+    cv::Mat img_global;
+    cv::Mat img_local;
 
     percentile_mapping(src, img_global, 0.25, 99.75);
     clahe_mapping_with_percentile(src, img_local, 3.0, cv::Size(8, 8));
 
-	cv::Mat weightMap;
-	computeWeightByGradient(img_local, weightMap, 10.0);
+    cv::Mat weightMap;
+    computeWeightByGradient(img_local, weightMap, 10.0);
 
-	cv::Mat globalFloat, localFloat;
+    cv::Mat globalFloat, localFloat;
     img_global.convertTo(globalFloat, CV_32F);
-	img_local.convertTo(localFloat, CV_32F);
+    img_local.convertTo(localFloat, CV_32F);
 
-	cv::Mat fusedFloat = globalFloat.mul(1.0 - weightMap) + localFloat.mul(weightMap);
+    cv::Mat fusedFloat = globalFloat.mul(1.0 - weightMap) + localFloat.mul(weightMap);
 
     cv::Mat dst;
-	fusedFloat.convertTo(dst, CV_8U);
+    fusedFloat.convertTo(dst, CV_8U);
 
     output.assign(dst);
-	return 0;
+    return 0;
 }
 
 // 根据局部方差自适应调整细节增强增益，方差大时降低增益，方差小的平坦区域保持较高增益，防止过增强产生光晕
 int DDE_adaptive_gain(cv::InputArray input, cv::OutputArray output, double baseGain, double sigma = 5.0)
 {
-	cv::Mat detailLayer = input.getMat();
-	CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
+    cv::Mat detailLayer = input.getMat();
+    CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
 
     // 局部方差估计
     cv::Mat mu, mu2, variance;
@@ -546,11 +547,11 @@ int DDE_adaptive_gain(cv::InputArray input, cv::OutputArray output, double baseG
     double k = baseGain - 1.0;
     cv::Mat gainMap = baseGain / (1.0 + k * varianceNorm);
 
-	output.assign(gainMap);
+    output.assign(gainMap);
     return 0;
 }
 
-// 基于双边滤波的细节增强算法实现
+
 int dde_enhance(cv::InputArray input, cv::OutputArray output)
 {
     struct DDEConfig
@@ -583,7 +584,7 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
 
     // Step 1: 归一化到 [0, 1]
     cv::Mat img_norm;
-	cv::normalize(src, img_norm, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
+    cv::normalize(src, img_norm, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
 
     // Step 2: 双边滤波分离基础层（低频光照）和细节层（高频细节）
     //         rangeSigma 在归一化域下有意义，无需随深度调整
@@ -618,7 +619,7 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
     cv::normalize(reconstructed, dst, 0, 65535, cv::NORM_MINMAX, CV_16U);
     percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
 
-	output.assign(dst);
+    output.assign(dst);
 
     return 0;
 }
@@ -633,8 +634,10 @@ int Test_single_method()
         return -1;
     }
 
-	double entropy = 0.0;
-	int imageCount = 0;
+    double entropy = 0.0;
+	double ag = 0.0;
+	double ssim = 0.0;
+    int imageCount = 0;
 
     for (const auto& entry : fs::directory_iterator(inputDir))
     {
@@ -652,32 +655,35 @@ int Test_single_method()
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-        /*cv::Mat dst_linear;
+        cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
-        imwrite_mdy_private(dst_linear, "Linear");*/
+        //imwrite_mdy_private(dst_linear, "Linear");
 
 
         /*cv::Mat dst_CLAHE;
-        clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));
-        imwrite_mdy_private(dst_CLAHE, "CLAHE");*/
+        clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));*/
+        //imwrite_mdy_private(dst_CLAHE, "CLAHE");
 
 
-        /*cv::Mat dst_GLAF;
-        global_local_adaptive_fusion(src, dst_GLAF);
-        imwrite_mdy_private(dst_GLAF, "GLAF");*/
+       /* cv::Mat dst_GLAF;
+        global_local_adaptive_fusion(src, dst_GLAF);*/
+        //imwrite_mdy_private(dst_GLAF, "GLAF");
 
 
-        /*cv::Mat dst_MSR;
-		multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
-		imwrite_mdy_private(dst_MSR, "MSR");*/
+        //cv::Mat dst_MSR;
+        //multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
+        //imwrite_mdy_private(dst_MSR, "MSR");
 
 
-		cv::Mat dst_DDE;
-		dde_enhance(src, dst_DDE);
-		imwrite_mdy_private(dst_DDE, "DDE");
+        cv::Mat dst_DDE;
+        dde_enhance(src, dst_DDE);
+        //imwrite_mdy_private(dst_DDE, "DDE");
 
-		entropy += calcEntropy(dst_DDE);
-		imageCount++;
+
+        entropy += calcEntropy(dst_DDE);
+		ag += calcAverageGradient(dst_DDE);
+		ssim += calcSSIM(dst_DDE, dst_linear);
+        imageCount++;
 
         cv::waitKey(1);
     }
@@ -685,7 +691,9 @@ int Test_single_method()
     if (imageCount > 0)
     {
         std::cout << "Average Entropy: " << entropy / imageCount << std::endl;
-	}
+		std::cout << "Average Gradient: " << ag / imageCount << std::endl;
+		std::cout << "Average SSIM: " << ssim / imageCount << std::endl;
+    }
 
     return 0;
 }
@@ -773,108 +781,12 @@ int Test_all_methods()
 int main()
 {
     //Test_all_methods();
-    Test_single_method();
+    //Test_single_method();
 
-    //benchmark_main();
-
-    return 0;
-}
-
-
-double benchmark(const std::vector<cv::Mat>& images,
-    const std::function<int(cv::InputArray, cv::OutputArray)>& func)
-{
-    cv::Mat dst;
-    auto start = std::chrono::high_resolution_clock::now();
-    for (const auto& img : images)
-    {
-        func(img, dst);
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    return Ms(end - start).count();
-}
-
-int benchmark_main()
-{
-    // 加载图像
-    std::vector<cv::Mat> images;
-    for (const auto& entry : fs::directory_iterator(IMAGE_DIR)) {
-        if (!entry.is_regular_file() || entry.path().extension() != ".png")
-            continue;
-        cv::Mat img = cv::imread(entry.path().string(),cv::IMREAD_UNCHANGED);
-        if (!img.empty() && img.type() == CV_16UC1)
-            images.push_back(img);
-    }
-    std::cout << "加载图像数量：" << images.size() << std::endl;
-
-    // 注册各算法
-    std::map<std::string, std::function<int(cv::InputArray, cv::OutputArray)>> algorithms;
-
-    algorithms["Linear"] = [](cv::InputArray input, cv::OutputArray output)->int {
-        return linear_mapping(input, output);
-        };
-
-    algorithms["CLAHE"] = [](cv::InputArray input, cv::OutputArray output)->int {
-        return clahe_mapping(input, output, 3.0, cv::Size(8, 8));
-        };
-
-    algorithms["GLAF"] = [](cv::InputArray input, cv::OutputArray output)->int {
-        return global_local_adaptive_fusion(input, output);
-        };
-
-    algorithms["MSR"] = [](cv::InputArray input, cv::OutputArray output)->int {
-        return multi_scale_retinex(input, output, { 15.0, 80.0, 250.0 });
-        };
-
-    algorithms["DDE"] = [](cv::InputArray input, cv::OutputArray output)->int {
-        return dde_enhance(input, output);
-        };
-
-    // 执行 benchmark 并打印结果
-    std::cout << "\n--- Benchmark Results ---" << std::endl;
-    std::cout << std::left
-        << std::setw(20) << "Algorithm"
-        << std::setw(15) << "Total(ms)"
-        << std::setw(15) << "Avg(ms)"
-        << std::endl;
-    std::cout << std::string(50, '-') << std::endl;
-
-    for (const auto& [name, func] : algorithms)
-    {
-        double totalMs = benchmark(images, func);
-        double avgMs = totalMs / images.size();
-        std::cout << std::left << std::setw(20) << name
-            << std::fixed << std::setprecision(2)
-            << std::setw(15) << totalMs
-            << std::setw(15) << avgMs
-            << std::endl;
-    }
+    benchmark_main();
 
     return 0;
 }
 
-double calcEntropy(cv::InputArray src)
-{
-    cv::Mat img = src.getMat();
-    CV_CheckTypeEQ(img.type(), CV_8UC1, "");
 
-    // 计算直方图
-    int histSize = 256;
-    float range[] = { 0, 256 };
-    const float* histRange = range;
-    cv::Mat hist;
-    cv::calcHist(&img, 1, nullptr, cv::Mat(), hist, 1, &histSize, &histRange);
 
-    // 归一化为概率
-    hist /= img.total();
-
-    // H = -sum(p * log2(p))
-    double entropy = 0.0;
-    for (int i = 0; i < histSize; i++)
-    {
-        float p = hist.at<float>(i);
-        if (p > 0)
-            entropy -= p * std::log2(p);
-    }
-    return entropy;  // 最大值为 8（均匀分布）
-}
