@@ -781,9 +781,9 @@ int Test_all_methods()
 int main()
 {
     //Test_all_methods();
-    //Test_single_method();
+    Test_single_method();
 
-    benchmark_main();
+    //benchmark_main();
 
     return 0;
 }
