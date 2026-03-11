@@ -89,7 +89,7 @@ double calcEntropy(cv::InputArray src)
     cv::calcHist(&img, 1, nullptr, cv::Mat(), hist, 1, &histSize, &histRange);
 
     // 归一化为概率
-    hist /= img.total();
+    hist /= static_cast<float>(img.total());
 
     // H = -sum(p * log2(p))
     double entropy = 0.0;
