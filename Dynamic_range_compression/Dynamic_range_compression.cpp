@@ -21,7 +21,7 @@ int imwrite_mdy_private(cv::InputArray input, const std::string file_name)
     std::ostringstream oss;
     oss << std::put_time(&now_tm, "%Y%m%d_%H%M%S_") << now.time_since_epoch().count() << std::string("_");
 
-    std::string output_file_name = std::string("C:\\Users\\Belfast\\Desktop\\result\\") + oss.str() + file_name + std::string(".png");
+    std::string output_file_name = std::string("C:\\Users\\13012\\Desktop\\result\\") + oss.str() + file_name + std::string(".png");
 
     std::cout << output_file_name << std::endl;
     cv::imwrite(output_file_name, src);
@@ -655,34 +655,39 @@ int Test_single_method()
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-        cv::Mat dst_linear;
+        /*cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
-        //imwrite_mdy_private(dst_linear, "Linear");
+        dst_linear = 255 - dst_linear;
+        imwrite_mdy_private(dst_linear, "Linear");*/
 
 
         /*cv::Mat dst_CLAHE;
-        clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));*/
-        //imwrite_mdy_private(dst_CLAHE, "CLAHE");
+        clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));
+		dst_CLAHE = 255 - dst_CLAHE;
+        imwrite_mdy_private(dst_CLAHE, "CLAHE");*/
 
 
-       /* cv::Mat dst_GLAF;
-        global_local_adaptive_fusion(src, dst_GLAF);*/
-        //imwrite_mdy_private(dst_GLAF, "GLAF");
+        /*cv::Mat dst_GLAF;
+        global_local_adaptive_fusion(src, dst_GLAF);
+		dst_GLAF = 255 - dst_GLAF;
+        imwrite_mdy_private(dst_GLAF, "GLAF");*/
 
 
-        //cv::Mat dst_MSR;
-        //multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
-        //imwrite_mdy_private(dst_MSR, "MSR");
+        /*cv::Mat dst_MSR;
+        multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
+		dst_MSR = 255 - dst_MSR;
+        imwrite_mdy_private(dst_MSR, "MSR");*/
 
 
         cv::Mat dst_DDE;
         dde_enhance(src, dst_DDE);
-        //imwrite_mdy_private(dst_DDE, "DDE");
+		dst_DDE = 255 - dst_DDE;
+        imwrite_mdy_private(dst_DDE, "DDE");
 
 
-        entropy += calcEntropy(dst_DDE);
+        /*entropy += calcEntropy(dst_DDE);
 		ag += calcAverageGradient(dst_DDE);
-		ssim += calcSSIM(dst_DDE, dst_linear);
+		ssim += calcSSIM(dst_DDE, dst_linear);*/
         imageCount++;
 
         cv::waitKey(1);
@@ -781,9 +786,9 @@ int Test_all_methods()
 int main()
 {
     //Test_all_methods();
-    //Test_single_method();
+    Test_single_method();
 
-    benchmark_main();
+    //benchmark_main();
 
     return 0;
 }
