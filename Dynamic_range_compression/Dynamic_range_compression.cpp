@@ -679,10 +679,16 @@ int Test_single_method()
         imwrite_mdy_private(dst_MSR, "MSR");*/
 
 
-        cv::Mat dst_DDE;
+        /*cv::Mat dst_DDE;
         dde_enhance(src, dst_DDE);
 		dst_DDE = 255 - dst_DDE;
-        imwrite_mdy_private(dst_DDE, "DDE");
+        imwrite_mdy_private(dst_DDE, "DDE");*/
+
+
+        cv::Mat dst_SSR;
+        single_scale_retinex(src, dst_SSR, 50);
+        dst_SSR = 255 - dst_SSR;
+        imwrite_mdy_private(dst_SSR, "SSR");
 
 
         /*entropy += calcEntropy(dst_DDE);
