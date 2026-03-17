@@ -3,6 +3,7 @@
 
 #include "Dynamic_range_compression.h"
 #include "quantitative_assessment.h"
+#include "Quantization.h"
 
 namespace fs = std::filesystem;
 using Ms = std::chrono::duration<double, std::milli>;
@@ -21,7 +22,7 @@ int imwrite_mdy_private(cv::InputArray input, const std::string file_name)
     std::ostringstream oss;
     oss << std::put_time(&now_tm, "%Y%m%d_%H%M%S_") << now.time_since_epoch().count() << std::string("_");
 
-    std::string output_file_name = std::string("C:\\Users\\13012\\Desktop\\result\\") + oss.str() + file_name + std::string(".png");
+    std::string output_file_name = std::string("C:\\Users\\Belfast\\Desktop\\result\\") + oss.str() + file_name + std::string(".png");
 
     std::cout << output_file_name << std::endl;
     cv::imwrite(output_file_name, src);
@@ -422,11 +423,27 @@ int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
 
     cv::Mat img8bit;
-    linear_mapping(img14bit, img8bit);
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clipLimit, tileSize);
+    clahe->apply(img14bit, img8bit);
 
     cv::Mat dst;
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clipLimit, tileSize);
-    clahe->apply(img8bit, dst);
+    linear_mapping(img8bit, dst);
+
+    output.assign(dst);
+    return 0;
+}
+
+int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 2.0, cv::Size tileSize = { 8, 8 })
+{
+    cv::Mat img14bit = input.getMat().clone();
+    CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
+
+    cv::Mat img8bit;
+    cv::Ptr<CLAHE_Fixed> clahe = createCLAHE_Fixed(clipLimit, tileSize);
+    clahe->apply(img14bit, img8bit);
+
+    cv::Mat dst;
+    linear_mapping(img8bit, dst);
 
     output.assign(dst);
     return 0;
@@ -635,8 +652,8 @@ int Test_single_method()
     }
 
     double entropy = 0.0;
-	double ag = 0.0;
-	double ssim = 0.0;
+    double ag = 0.0;
+    double ssim = 0.0;
     int imageCount = 0;
 
     for (const auto& entry : fs::directory_iterator(inputDir))
@@ -663,37 +680,43 @@ int Test_single_method()
 
         /*cv::Mat dst_CLAHE;
         clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));
-		dst_CLAHE = 255 - dst_CLAHE;
+        dst_CLAHE = 255 - dst_CLAHE;
         imwrite_mdy_private(dst_CLAHE, "CLAHE");*/
+
+
+        cv::Mat dst_CLAHE_Fixed;
+        clahe_fixed_mapping(src, dst_CLAHE_Fixed, 3.0, cv::Size(8, 8));
+        dst_CLAHE_Fixed = 255 - dst_CLAHE_Fixed;
+        imwrite_mdy_private(dst_CLAHE_Fixed, "CLAHE_Fixed");
 
 
         /*cv::Mat dst_GLAF;
         global_local_adaptive_fusion(src, dst_GLAF);
-		dst_GLAF = 255 - dst_GLAF;
+        dst_GLAF = 255 - dst_GLAF;
         imwrite_mdy_private(dst_GLAF, "GLAF");*/
 
 
         /*cv::Mat dst_MSR;
         multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
-		dst_MSR = 255 - dst_MSR;
+        dst_MSR = 255 - dst_MSR;
         imwrite_mdy_private(dst_MSR, "MSR");*/
 
 
         /*cv::Mat dst_DDE;
         dde_enhance(src, dst_DDE);
-		dst_DDE = 255 - dst_DDE;
+        dst_DDE = 255 - dst_DDE;
         imwrite_mdy_private(dst_DDE, "DDE");*/
 
 
-        cv::Mat dst_SSR;
+       /* cv::Mat dst_SSR;
         single_scale_retinex(src, dst_SSR, 50);
         dst_SSR = 255 - dst_SSR;
-        imwrite_mdy_private(dst_SSR, "SSR");
+        imwrite_mdy_private(dst_SSR, "SSR");*/
 
 
         /*entropy += calcEntropy(dst_DDE);
-		ag += calcAverageGradient(dst_DDE);
-		ssim += calcSSIM(dst_DDE, dst_linear);*/
+        ag += calcAverageGradient(dst_DDE);
+        ssim += calcSSIM(dst_DDE, dst_linear);*/
         imageCount++;
 
         cv::waitKey(1);
@@ -702,8 +725,8 @@ int Test_single_method()
     if (imageCount > 0)
     {
         std::cout << "Average Entropy: " << entropy / imageCount << std::endl;
-		std::cout << "Average Gradient: " << ag / imageCount << std::endl;
-		std::cout << "Average SSIM: " << ssim / imageCount << std::endl;
+        std::cout << "Average Gradient: " << ag / imageCount << std::endl;
+        std::cout << "Average SSIM: " << ssim / imageCount << std::endl;
     }
 
     return 0;
