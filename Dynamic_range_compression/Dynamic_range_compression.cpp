@@ -671,46 +671,40 @@ int Test_single_method()
 
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+		cv::subtract(16383, src, src); 
 
         /*cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
-        dst_linear = 255 - dst_linear;
         imwrite_mdy_private(dst_linear, "Linear");*/
 
 
         /*cv::Mat dst_CLAHE;
         clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));
-        dst_CLAHE = 255 - dst_CLAHE;
         imwrite_mdy_private(dst_CLAHE, "CLAHE");*/
 
 
         cv::Mat dst_CLAHE_Fixed;
         clahe_fixed_mapping(src, dst_CLAHE_Fixed, 3.0, cv::Size(8, 8));
-        dst_CLAHE_Fixed = 255 - dst_CLAHE_Fixed;
         imwrite_mdy_private(dst_CLAHE_Fixed, "CLAHE_Fixed");
 
 
         /*cv::Mat dst_GLAF;
         global_local_adaptive_fusion(src, dst_GLAF);
-        dst_GLAF = 255 - dst_GLAF;
         imwrite_mdy_private(dst_GLAF, "GLAF");*/
 
 
         /*cv::Mat dst_MSR;
         multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
-        dst_MSR = 255 - dst_MSR;
         imwrite_mdy_private(dst_MSR, "MSR");*/
 
 
         /*cv::Mat dst_DDE;
         dde_enhance(src, dst_DDE);
-        dst_DDE = 255 - dst_DDE;
         imwrite_mdy_private(dst_DDE, "DDE");*/
 
 
        /* cv::Mat dst_SSR;
         single_scale_retinex(src, dst_SSR, 50);
-        dst_SSR = 255 - dst_SSR;
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
 
