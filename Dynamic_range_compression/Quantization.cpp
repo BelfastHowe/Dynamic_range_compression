@@ -1,4 +1,5 @@
 #include "Quantization.h"
+#include <atomic>
 
 namespace fs = std::filesystem;
 
@@ -386,8 +387,8 @@ public:
         result_max_.store(0);
     }
 
-    uint16_t get_min() const { return result_min_.load(std::memory_order_relaxed); }
-    uint16_t get_max() const { return result_max_.load(std::memory_order_relaxed); }
+    uint16_t get_min() const { return result_min_.load(); }
+    uint16_t get_max() const { return result_max_.load(); }
 
     void operator ()(const cv::Range& range) const CV_OVERRIDE;
 
@@ -820,7 +821,7 @@ PrecisionReport test_clahe_precision_14to8(
         rpt.over_1lsb, n, rpt.over_1lsb_pct);
 
 	cv::normalize(residual_map, residual_map, 0, 255, cv::NORM_MINMAX);
-	//imwrite_mdy_private(residual_map, "residual_map.png");
+	imwrite_mdy_private(residual_map, "residual_map.png");
 
     return rpt;
 }

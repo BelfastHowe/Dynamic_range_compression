@@ -465,16 +465,18 @@ int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, int clipLi
         {
             std::cerr << "Warning: CLAHE_Fixed global min/max mismatch! Computed: [" << in_min << ", " << in_max << "], Reported: [" 
                 << global_min << ", " << global_max << "]" << std::endl;
+			global_min = in_min;
+			global_max = in_max;
         }
     }
 
-    uint16_t range = global_max - global_min;
+    uint64_t range = cv::saturate_cast<uint64_t>(global_max - global_min);
     if (range == 0) range = 1;
 
     constexpr int      Q = 16;
-    constexpr uint32_t OUT_MAX = 255;
-    constexpr uint32_t ROUND = 1 << (Q - 1); // 四舍五入偏移
-    uint32_t scale_fixed = ((OUT_MAX << (Q + 1)) / range + 1) >> 1;
+    constexpr uint64_t OUT_MAX = 255;
+    constexpr uint64_t ROUND = 1 << (Q - 1); // 四舍五入偏移
+    uint64_t scale_fixed = ((OUT_MAX << (Q + 1)) / range + 1) >> 1;
 
     // Step3: 逐像素映射
     cv::Mat  dst(CLAHE.size(), CV_8UC1, cv::Scalar(0));
@@ -484,9 +486,9 @@ int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, int clipLi
         auto* pdst = dst.ptr<uint8_t>(i);
         for (int j = 0; j < w; ++j)
         {
-            uint32_t val = cv::saturate_cast<uint32_t>(psrc[j]);
-            uint32_t diff = val - cv::saturate_cast<uint32_t>(global_min);
-            uint32_t res = (diff * scale_fixed + ROUND) >> Q;
+            uint64_t val = cv::saturate_cast<uint64_t>(psrc[j]);
+            uint64_t diff = val - cv::saturate_cast<uint64_t>(global_min);
+            uint64_t res = (diff * scale_fixed + ROUND) >> Q;
             pdst[j] = cv::saturate_cast<uint8_t>(res);
         }
     }
