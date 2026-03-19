@@ -417,33 +417,79 @@ int equalize_hist_16UC1(cv::InputArray input, cv::OutputArray output, double max
 }
 
 
-int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 2.0, cv::Size tileSize = { 8, 8 })
+int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 128.0, cv::Size tileSize = { 8, 8 })
 {
     cv::Mat img14bit = input.getMat().clone();
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
 
-    cv::Mat img8bit;
+    cv::Mat CLAHE;
     cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clipLimit, tileSize);
-    clahe->apply(img14bit, img8bit);
+    clahe->apply(img14bit, CLAHE);
 
     cv::Mat dst;
-    linear_mapping(img8bit, dst);
+    linear_mapping(CLAHE, dst);
 
     output.assign(dst);
     return 0;
 }
 
-int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 2.0, cv::Size tileSize = { 8, 8 })
+int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, int clipLimit = 128, cv::Size tileSize = { 8, 8 })
 {
     cv::Mat img14bit = input.getMat().clone();
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
 
-    cv::Mat img8bit;
+    cv::Mat CLAHE;
     cv::Ptr<CLAHE_Fixed> clahe = createCLAHE_Fixed(clipLimit, tileSize);
-    clahe->apply(img14bit, img8bit);
+    clahe->apply(img14bit, CLAHE);
 
-    cv::Mat dst;
-    linear_mapping(img8bit, dst);
+    auto global_min = clahe->getGlobalMin();
+    auto global_max = clahe->getGlobalMax();
+
+    auto h = CLAHE.rows;
+    auto w = CLAHE.cols;
+    {
+        uint16_t in_min = CLAHE.ptr<uint16_t>()[0];
+        uint16_t in_max = CLAHE.ptr<uint16_t>()[0];
+
+        for (int i = 1; i < h; ++i)
+        {
+            const auto* psrc = CLAHE.ptr<uint16_t>(i);
+            for (int j = 0; j < w; ++j)
+            {
+                if (psrc[j] < in_min) in_min = psrc[j];
+                if (psrc[j] > in_max) in_max = psrc[j];
+            }
+        }
+
+        if (in_min != global_min || in_max != global_max)
+        {
+            std::cerr << "Warning: CLAHE_Fixed global min/max mismatch! Computed: [" << in_min << ", " << in_max << "], Reported: [" 
+                << global_min << ", " << global_max << "]" << std::endl;
+        }
+    }
+
+    uint16_t range = global_max - global_min;
+    if (range == 0) range = 1;
+
+    constexpr int      Q = 16;
+    constexpr uint32_t OUT_MAX = 255;
+    constexpr uint32_t ROUND = 1 << (Q - 1); // 四舍五入偏移
+    uint32_t scale_fixed = ((OUT_MAX << (Q + 1)) / range + 1) >> 1;
+
+    // Step3: 逐像素映射
+    cv::Mat  dst(CLAHE.size(), CV_8UC1, cv::Scalar(0));
+    for (int i = 1; i < h; ++i)
+    {
+        const auto* psrc = CLAHE.ptr<uint16_t>(i);
+        auto* pdst = dst.ptr<uint8_t>(i);
+        for (int j = 0; j < w; ++j)
+        {
+            uint32_t val = cv::saturate_cast<uint32_t>(psrc[j]);
+            uint32_t diff = val - cv::saturate_cast<uint32_t>(global_min);
+            uint32_t res = (diff * scale_fixed + ROUND) >> Q;
+            pdst[j] = cv::saturate_cast<uint8_t>(res);
+        }
+    }
 
     output.assign(dst);
     return 0;
@@ -671,16 +717,16 @@ int Test_single_method()
 
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
-		cv::subtract(16383, src, src); 
+        cv::subtract(16383, src, src); 
 
         /*cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
         imwrite_mdy_private(dst_linear, "Linear");*/
 
 
-        /*cv::Mat dst_CLAHE;
+        cv::Mat dst_CLAHE;
         clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));
-        imwrite_mdy_private(dst_CLAHE, "CLAHE");*/
+        imwrite_mdy_private(dst_CLAHE, "CLAHE");
 
 
         cv::Mat dst_CLAHE_Fixed;
@@ -809,9 +855,11 @@ int Test_all_methods()
 int main()
 {
     //Test_all_methods();
-    Test_single_method();
+    //Test_single_method();
 
     //benchmark_main();
+
+    test_clahe_precision_batch_14to8();
 
     return 0;
 }

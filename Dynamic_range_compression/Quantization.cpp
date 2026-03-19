@@ -1,6 +1,6 @@
 #include "Quantization.h"
 
-
+namespace fs = std::filesystem;
 
 
 
@@ -330,7 +330,8 @@ public:
         xa1_p = xa_p + src.cols;
 
         int lut_step = static_cast<int>(lut_.step / sizeof(T));
-        uint64_t inv_tw_fixed = (1ULL << W_BITS) / static_cast<uint64_t>(tileSize_.width);
+        //uint64_t inv_tw_fixed = (1ULL << W_BITS) / static_cast<uint64_t>(tileSize_.width);
+        uint64_t inv_tw_fixed = ((1ULL << (W_BITS + 1)) / static_cast<uint64_t>(tileSize_.width) + 1) >> 1;
 
         /*for (int x = 0; x < src.cols; ++x)
         {
@@ -380,7 +381,13 @@ public:
             ind1_p[x] = tx1 * lut_step;
             ind2_p[x] = tx2 * lut_step;
         }
+
+        result_min_.store(65535);
+        result_max_.store(0);
     }
+
+    uint16_t get_min() const { return result_min_.load(std::memory_order_relaxed); }
+    uint16_t get_max() const { return result_max_.load(std::memory_order_relaxed); }
 
     void operator ()(const cv::Range& range) const CV_OVERRIDE;
 
@@ -397,12 +404,19 @@ private:
 
     cv::AutoBuffer<uint64_t> xbuf;
     uint64_t * xa_p, * xa1_p; // 定点权重指针
+
+    mutable std::atomic<uint16_t> result_min_;
+    mutable std::atomic<uint16_t> result_max_;
 };
 
 template <class T>
 void CLAHE_Interpolation_Body_Fixed<T>::operator ()(const cv::Range& range) const
 {
-    uint64_t inv_th_fixed = (1ULL << W_BITS) / static_cast<uint64_t>(tileSize_.height);
+    uint16_t local_min = 65535;
+    uint16_t local_max = 0;
+
+    //uint64_t inv_th_fixed = (1ULL << W_BITS) / static_cast<uint64_t>(tileSize_.height);
+    uint64_t inv_th_fixed = ((1ULL << (W_BITS + 1)) / static_cast<uint64_t>(tileSize_.height) + 1) >> 1;
 
     for (int y = range.start; y < range.end; ++y)
     {
@@ -445,23 +459,29 @@ void CLAHE_Interpolation_Body_Fixed<T>::operator ()(const cv::Range& range) cons
             // 第三级：还原回 14-bit 原始深度并截断
             dstRow[x] = cv::saturate_cast<T>(res) << shift_;
 
-            if (ind1 != ind2)
-            {
-                int a = 0;
-            }
+            uint16_t res_16bit = cv::saturate_cast<uint16_t>(res) << shift_;
+            if (res_16bit < local_min) local_min = res_16bit;
+            if (res_16bit > local_max) local_max = res_16bit;
         }
     }
+
+    uint16_t cur_min = result_min_.load(std::memory_order_relaxed);
+    while (local_min < cur_min && !result_min_.compare_exchange_weak(cur_min, local_min, std::memory_order_relaxed))
+		;
+	uint16_t cur_max = result_max_.load(std::memory_order_relaxed);
+    while (local_max > cur_max && !result_max_.compare_exchange_weak(cur_max, local_max, std::memory_order_relaxed))
+        ;
 }
 
 class CLAHE_Impl_Fixed CV_FINAL : public CLAHE_Fixed
 {
 public:
-    CLAHE_Impl_Fixed(double clipLimit = 40.0, int tilesX = 8, int tilesY = 8, int bitShift = 0);
+    CLAHE_Impl_Fixed(int clipLimit = 40, int tilesX = 8, int tilesY = 8, int bitShift = 0);
 
     void apply(cv::InputArray src, cv::OutputArray dst) CV_OVERRIDE;
 
-    void setClipLimit(double clipLimit) CV_OVERRIDE;
-    double getClipLimit() const CV_OVERRIDE;
+    void setClipLimit(int clipLimit) CV_OVERRIDE;
+    int getClipLimit() const CV_OVERRIDE;
 
     void setTilesGridSize(cv::Size tileGridSize) CV_OVERRIDE;
     cv::Size getTilesGridSize() const CV_OVERRIDE;
@@ -471,17 +491,23 @@ public:
 
     void collectGarbage() CV_OVERRIDE;
 
+    uint16_t getGlobalMin() const CV_OVERRIDE;
+	uint16_t getGlobalMax() const CV_OVERRIDE;
+
 private:
-    double clipLimit_;
+    int clipLimit_;
     int tilesX_;
     int tilesY_;
     int bitShift_;
 
     cv::Mat srcExt_;
     cv::Mat lut_;
+
+    uint16_t global_min_ = UINT16_MAX;
+    uint16_t global_max_ = 0;
 };
 
-CLAHE_Impl_Fixed::CLAHE_Impl_Fixed(double clipLimit, int tilesX, int tilesY, int bitShift) :
+CLAHE_Impl_Fixed::CLAHE_Impl_Fixed(int clipLimit, int tilesX, int tilesY, int bitShift) :
     clipLimit_(clipLimit), tilesX_(tilesX), tilesY_(tilesY), bitShift_(bitShift)
 {
 }
@@ -509,12 +535,12 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
     
 
     const int tileSizeTotal = tileSize.area();
-    const uint64_t lutScale = (cv::saturate_cast<uint64_t>(histSize - 1) << Q) / cv::saturate_cast<uint64_t>(tileSizeTotal);
+    const uint64_t lutScale = ((cv::saturate_cast<uint64_t>(histSize - 1) << (Q + 1)) / cv::saturate_cast<uint64_t>(tileSizeTotal) + 1) >> 1;
 
     int clipLimit = 0;
-    if (clipLimit_ > 0.0)
+    if (clipLimit_ > 0)
     {
-        clipLimit = static_cast<int>(clipLimit_ * tileSizeTotal / histSize);
+        clipLimit = (((clipLimit_ * tileSizeTotal) << 1) / histSize + 1) >> 1;
         clipLimit = std::max(clipLimit, 1);
     }
 
@@ -540,7 +566,7 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
 
     cv::Mat lut_cv;
     {
-		lut_cv.create(tilesX_ * tilesY_, histSize, _src.type());
+        lut_cv.create(tilesX_ * tilesY_, histSize, _src.type());
         const float lutScale_cv = static_cast<float>(histSize - 1) / tileSizeTotal;
 
         cv::Ptr<cv::ParallelLoopBody> calcLutBody_cv;
@@ -563,48 +589,60 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
     double minVal, maxVal;
     cv::minMaxLoc(diff_lut, &minVal, &maxVal);
     int nonzero = cv::countNonZero(diff_lut);
+    cv::Mat lut_mask;
+    cv::compare(diff_lut, 1, lut_mask, cv::CMP_GT); // CMP_GT 表示大于
+    int lut_greater1 = cv::countNonZero(lut_mask);
 
-    cv::Ptr<cv::ParallelLoopBody> interpolationBody;
+    //cv::Ptr<cv::ParallelLoopBody> interpolationBody;
     if (_src.type() == CV_8UC1)
     {
-        interpolationBody = cv::makePtr<CLAHE_Interpolation_Body_Fixed<uchar> >(src, dst, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+        auto body = cv::makePtr<CLAHE_Interpolation_Body_Fixed<uchar> >(src, dst, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+        cv::parallel_for_(cv::Range(0, src.rows), *body);
+		global_min_ = body->get_min();
+		global_max_ = body->get_max();
     }
     else if (_src.type() == CV_16UC1)
     {
-        interpolationBody = cv::makePtr<CLAHE_Interpolation_Body_Fixed<ushort> >(src, dst, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+        auto body = cv::makePtr<CLAHE_Interpolation_Body_Fixed<ushort> >(src, dst, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+        cv::parallel_for_(cv::Range(0, src.rows), *body);
+        global_min_ = body->get_min();
+        global_max_ = body->get_max();
     }
 
-    cv::parallel_for_(cv::Range(0, src.rows), *interpolationBody);
+    //cv::parallel_for_(cv::Range(0, src.rows), *interpolationBody);
 
-	cv::Mat dst_cv(dst.size(), dst.type());
+    cv::Mat dst_cv(dst.size(), dst.type());
     {
         cv::Ptr<cv::ParallelLoopBody> interpolationBody_cv;
         if (_src.type() == CV_8UC1)
         {
-            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body<uchar> >(src, dst_cv, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body<uchar> >(src, dst_cv, lut_cv, tileSize, tilesX_, tilesY_, bitShift_);
         }
         else if (_src.type() == CV_16UC1)
         {
-            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body<ushort> >(src, dst_cv, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body<ushort> >(src, dst_cv, lut_cv, tileSize, tilesX_, tilesY_, bitShift_);
         }
-		cv::parallel_for_(cv::Range(0, src.rows), *interpolationBody_cv);
+        cv::parallel_for_(cv::Range(0, src.rows), *interpolationBody_cv);
     }
 
-	cv::Mat diff_dst;
-	cv::absdiff(dst, dst_cv, diff_dst);
-	double minDstVal, maxDstVal;
-	cv::minMaxLoc(diff_dst, &minDstVal, &maxDstVal);
-	int nonzeroDst = cv::countNonZero(diff_dst);
+    cv::Mat diff_dst;
+    cv::absdiff(dst, dst_cv, diff_dst);
+    double minDstVal, maxDstVal;
+    cv::minMaxLoc(diff_dst, &minDstVal, &maxDstVal);
+    int nonzeroDst = cv::countNonZero(diff_dst);
+    cv::Mat dst_mask;
+    cv::compare(diff_dst, 1, dst_mask, cv::CMP_GT); // CMP_GT 表示大于
+    int dst_greater1 = cv::countNonZero(dst_mask);
 
-	diff_lut.release();
+    diff_lut.release();
 }
 
-void CLAHE_Impl_Fixed::setClipLimit(double clipLimit)
+void CLAHE_Impl_Fixed::setClipLimit(int clipLimit)
 {
     clipLimit_ = clipLimit;
 }
 
-double CLAHE_Impl_Fixed::getClipLimit() const
+int CLAHE_Impl_Fixed::getClipLimit() const
 {
     return clipLimit_;
 }
@@ -636,8 +674,18 @@ void CLAHE_Impl_Fixed::collectGarbage()
     lut_.release();
 }
 
+uint16_t CLAHE_Impl_Fixed::getGlobalMin() const
+{
+    return global_min_;
+}
 
-cv::Ptr<CLAHE_Fixed> createCLAHE_Fixed(double clipLimit, cv::Size tileGridSize)
+uint16_t CLAHE_Impl_Fixed::getGlobalMax() const
+{
+    return global_max_;
+}
+
+
+cv::Ptr<CLAHE_Fixed> createCLAHE_Fixed(int clipLimit, cv::Size tileGridSize)
 {
     return cv::makePtr<CLAHE_Impl_Fixed>(clipLimit, tileGridSize.width, tileGridSize.height);
 }
@@ -648,17 +696,17 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-	auto h = src.rows;
-	auto w = src.cols;
+    auto h = src.rows;
+    auto w = src.cols;
 
     // Step1: 整数 min/max 扫描，无浮点
-	uint16_t in_min = src.ptr<uint16_t>()[0];
+    uint16_t in_min = src.ptr<uint16_t>()[0];
     uint16_t in_max = src.ptr<uint16_t>()[0];
 
     for (int i = 1; i < h; ++i)
     {
         const auto* psrc = src.ptr<uint16_t>(i);
-		for (int j = 0; j < w; ++j)
+        for (int j = 0; j < w; ++j)
         {
             if (psrc[j] < in_min) in_min = psrc[j];
             if (psrc[j] > in_max) in_max = psrc[j];
@@ -671,25 +719,178 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
     // Step2: 预计算 scale，帧头一次性整数除法
     constexpr int      Q = 16;
     constexpr uint32_t OUT_MAX = 255;
-	constexpr uint32_t ROUND = 1 << (Q - 1); // 四舍五入偏移
-    uint32_t scale_fixed = ((OUT_MAX << Q) + range / 2) / range;
+    constexpr uint32_t ROUND = 1 << (Q - 1); // 四舍五入偏移
+    //uint32_t scale_fixed = ((OUT_MAX << Q) + range / 2) / range;
+    uint32_t scale_fixed = ((OUT_MAX << (Q + 1)) / range + 1) >> 1;
 
     // Step3: 逐像素映射
     cv::Mat  dst(src.size(), CV_8UC1);
     for (int i = 1; i < h; ++i)
     {
-		const auto* psrc = src.ptr<uint16_t>(i);
-		auto* pdst = dst.ptr<uint8_t>(i);
+        const auto* psrc = src.ptr<uint16_t>(i);
+        auto* pdst = dst.ptr<uint8_t>(i);
         for (int j = 0; j < w; ++j)
         {
             uint32_t val = cv::saturate_cast<uint32_t>(psrc[j]);
             uint32_t diff = val - cv::saturate_cast<uint32_t>(in_min);
-			uint32_t res = (diff * scale_fixed + ROUND) >> Q;
+            uint32_t res = (diff * scale_fixed + ROUND) >> Q;
             pdst[j] = cv::saturate_cast<uint8_t>(res);
         }
     }
 
     output.assign(dst);
+    return 0;
+}
+
+
+struct PrecisionReport
+{
+    double psnr = 0.0;          // 峰值信噪比，>40dB 可接受，>60dB 优秀
+    double mae = 0.0;           // 平均绝对误差
+    int    max_abs_err = 0;   // 最大绝对误差  ≤ 1LSB  理想情况，仅定点舍入误差
+    int    over_1lsb = 0;     // 误差 >1LSB 的像素数
+    double over_1lsb_pct = 0.0; // 占比  < 0.1%  可接受
+};
+
+PrecisionReport test_clahe_precision_14to8(
+    cv::InputArray input,     // 原始 14bit 输入
+    int clipLimit,
+    cv::Size tileSize)
+{
+	cv::Mat img14bit = input.getMat();
+    CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
+
+    // 浮点参考版本
+    cv::Mat ref_out;
+	clahe_mapping(img14bit, ref_out, clipLimit, tileSize);
+
+    // 定点量化版本
+    cv::Mat fixed_out;
+	clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
+
+    //8bit
+    CV_Assert(ref_out.size() == fixed_out.size());
+    CV_Assert(ref_out.type() == fixed_out.type());
+
+    // 逐像素比对
+    const int n = cv::saturate_cast<int>(img14bit.total());
+
+    PrecisionReport rpt{};
+    double sse = 0;
+    double sum_err = 0;
+    const double MAX_VAL = 255.0; // CLAHE 输出归一化到 8bit 等效范围
+
+    cv::Mat residual_map(ref_out.size(), CV_8UC1);
+
+    for (int r = 0; r < ref_out.rows; ++r)
+    {
+        const auto* pref = ref_out.ptr<uint8_t>(r);
+        const auto* pfixed = fixed_out.ptr<uint8_t>(r);
+        uint8_t* pres = residual_map.ptr<uint8_t>(r);
+        for (int c = 0; c < ref_out.cols; ++c)
+        {
+            int err = std::abs(cv::saturate_cast<int>(pref[c]) - cv::saturate_cast<int>(pfixed[c]));
+            rpt.max_abs_err = std::max(rpt.max_abs_err, err);
+
+            if (err > 1) rpt.over_1lsb++;
+
+            sum_err += err;
+            sse += cv::saturate_cast<double>(err) * cv::saturate_cast<double>(err);
+
+            pres[c] = cv::saturate_cast<uint8_t>(err);
+        }
+    }
+
+    double mse = sse / n;
+    rpt.mae = sum_err / n;
+    rpt.over_1lsb_pct = 100.0 * rpt.over_1lsb / n;
+    rpt.psnr = (mse > 0)
+        ? 10.0 * std::log10(MAX_VAL * MAX_VAL / mse)
+        : std::numeric_limits<double>::infinity();
+
+    // 打印报告
+    printf("=== CLAHE 量化精度报告 ===\n");
+    printf("图像尺寸     : %dx%d\n", img14bit.cols, img14bit.rows);
+    printf("clipLimit    : %d\n", clipLimit);
+    printf("tileSize     : %dx%d\n", tileSize.width, tileSize.height);
+    printf("PSNR         : %.2f dB\n", rpt.psnr);
+    printf("MAE          : %.4f LSB\n", rpt.mae);
+    printf("max_abs_err  : %d LSB\n", rpt.max_abs_err);
+    printf(">1LSB 像素   : %d / %d (%.3f%%)\n",
+        rpt.over_1lsb, n, rpt.over_1lsb_pct);
+
+	cv::normalize(residual_map, residual_map, 0, 255, cv::NORM_MINMAX);
+	//imwrite_mdy_private(residual_map, "residual_map.png");
+
+    return rpt;
+}
+
+int test_clahe_precision_batch_14to8()
+{
+    int clipLimit = 3;
+    cv::Size tileSize = cv::Size(8, 8);
+
+    fs::path inputDir(IMAGE_DIR);
+
+    if (!fs::exists(inputDir))
+    {
+        std::cerr << "Input directory not found: " << IMAGE_DIR << std::endl;
+        return -1;
+    }
+
+    std::vector<cv::Mat> images;
+    for (const auto& entry : fs::directory_iterator(inputDir))
+    {
+        // 过滤 png 文件
+        if (!entry.is_regular_file() || entry.path().extension() != ".png")
+            continue;
+
+        cv::Mat src = cv::imread(entry.path().string(), cv::IMREAD_UNCHANGED);
+        if (src.empty())
+        {
+            std::cerr << "Failed to read: " << entry.path() << std::endl;
+            continue;
+        }
+
+        // 处理图像
+        CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+        cv::subtract(16383, src, src);
+
+		images.push_back(src);
+    }
+
+    PrecisionReport avg{};
+    double sum_psnr = 0;
+    double sum_mae = 0;
+    int    sum_max_abs_err = 0;
+    int    sum_over_1lsb = 0;
+    double sum_over_1lsb_pct = 0;
+
+    for (int i = 0; i < images.size(); ++i)
+    {
+        printf("--- 第 %d / %zu 张 ---\n", i + 1, images.size());
+        PrecisionReport rpt = test_clahe_precision_14to8(images[i], clipLimit, tileSize);
+
+        sum_psnr += rpt.psnr;
+        sum_mae += rpt.mae;
+        sum_max_abs_err = std::max(sum_max_abs_err, rpt.max_abs_err); // 取最差值
+        sum_over_1lsb += rpt.over_1lsb;
+        sum_over_1lsb_pct += rpt.over_1lsb_pct;
+    }
+
+    const int m = static_cast<int>(images.size());
+    avg.psnr = sum_psnr / m;
+    avg.mae = sum_mae / m;
+    avg.max_abs_err = sum_max_abs_err;   // 整批最大误差
+    avg.over_1lsb = sum_over_1lsb / m; // 平均每张超标像素数
+    avg.over_1lsb_pct = sum_over_1lsb_pct / m;
+
+    printf("=== 批量测试汇总 ( %d 张 ) ===\n", m);
+    printf("平均 PSNR        : %.2f dB\n", avg.psnr);
+    printf("平均 MAE         : %.4f LSB\n", avg.mae);
+    printf("全局 max_abs_err : %d LSB\n", avg.max_abs_err);
+    printf("平均 >1LSB 像素  : %d (%.3f%%)\n", avg.over_1lsb, avg.over_1lsb_pct);
+
     return 0;
 }
 

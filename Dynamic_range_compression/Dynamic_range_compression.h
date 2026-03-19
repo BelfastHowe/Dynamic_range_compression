@@ -26,6 +26,8 @@ int linear_mapping(cv::InputArray input, cv::OutputArray output);
 // CLAHE函数实现，输入为单通道16位图像，输出为单通道8位图像，clipLimit为对比度限制，tileSize为分块规则
 int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit, cv::Size tileSize);
 
+int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, int clipLimit, cv::Size tileSize);
+
 // 全局局部自适应融合函数，根据局部图像的梯度计算权重图，将全局映射图和局部映射图进行加权融合，得到最终的增强图像
 int global_local_adaptive_fusion(cv::InputArray input, cv::OutputArray output);
 
