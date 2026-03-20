@@ -566,7 +566,7 @@ void CLAHE_Interpolation_Body_Fixed<T>::operator ()(const cv::Range& range) cons
         const T* srcRow = src_.ptr<T>(y);
         T* dstRow = dst_.ptr<T>(y);
 
-        // --- 纵向坐标定点化计算 (模拟硬件累加器/坐标映射器) ---
+        // --- 纵向坐标定点化计算 ---
         // tyf = y * inv_th - 0.5
         int64_t tyf = cv::saturate_cast<int64_t>(cv::saturate_cast<uint64_t>(y) * inv_th_fixed) - cv::saturate_cast<int64_t>(W_ROUND_OFFSET);
 
@@ -574,7 +574,7 @@ void CLAHE_Interpolation_Body_Fixed<T>::operator ()(const cv::Range& range) cons
         int ty1 = static_cast<int>(tyf >> W_BITS);
         int ty2 = ty1 + 1;
 
-        // 提取低位并缩放到 Q 权重
+        // 缩放到 Q 权重
         uint64_t ya = cv::saturate_cast<uint64_t>(tyf - (cv::saturate_cast<int64_t>(ty1) << W_BITS));
         uint64_t ya1 = (1ULL << W_BITS) - ya;
 
@@ -587,19 +587,19 @@ void CLAHE_Interpolation_Body_Fixed<T>::operator ()(const cv::Range& range) cons
 
         for (int x = 0; x < src_.cols; ++x)
         {
-            // 输入 14-bit 降采样到 histSize
+            // 原始像素值
             int srcVal = srcRow[x] >> shift_;
 
             int ind1 = ind1_p[x] + srcVal;
             int ind2 = ind2_p[x] + srcVal;
 
-            // --- 核心插值公式量化 (三级乘法累加) ---
+            // --- 核心插值公式量化 (乘法累加) ---
             uint64_t r1_res = cv::saturate_cast<uint64_t>(lutPlane1[ind1]) * xa1_p[x] + cv::saturate_cast<uint64_t>(lutPlane1[ind2]) * xa_p[x];
             uint64_t r2_res = cv::saturate_cast<uint64_t>(lutPlane2[ind1]) * xa1_p[x] + cv::saturate_cast<uint64_t>(lutPlane2[ind2]) * xa_p[x];
 
             uint64_t res = (r1_res * ya1 + r2_res * ya + W_ROUND) >> (W_BITS * 2);
 
-            // 第三级：还原回 14-bit 原始深度并截断
+            // 第三级：还原回原始深度并截断
             dstRow[x] = cv::saturate_cast<T>(res) << shift_;
 
             uint16_t res_16bit = cv::saturate_cast<uint16_t>(res) << shift_;
@@ -993,14 +993,14 @@ PrecisionReport test_clahe_precision_14to8(
 
     // 浮点参考版本
     cv::Mat ref_out;
-    //clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
-    single_scale_retinex(img14bit, ref_out, 50);
+    clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
+    //single_scale_retinex(img14bit, ref_out, 50);
 
     // 定点量化版本
     cv::Mat fixed_out;
-    //clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
-    cv::Ptr<SSR_Fixed> ssr = cv::makePtr<SSR_Fixed>(16, 24, 16, 50);
-	ssr->apply(img14bit, fixed_out);
+    clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
+    //cv::Ptr<SSR_Fixed> ssr = cv::makePtr<SSR_Fixed>(16, 24, 16, 50);
+	//ssr->apply(img14bit, fixed_out);
 
     //8bit
     CV_Assert(ref_out.size() == fixed_out.size());
