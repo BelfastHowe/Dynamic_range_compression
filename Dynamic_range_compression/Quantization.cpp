@@ -1,4 +1,4 @@
-#include "Quantization.h"
+﻿#include "Quantization.h"
 #include <atomic>
 
 namespace fs = std::filesystem;
@@ -6,10 +6,10 @@ namespace fs = std::filesystem;
 
 
 template <class T>
-class CLAHE_CalcLut_Body : public cv::ParallelLoopBody
+class CLAHE_CalcLut_Body_Float : public cv::ParallelLoopBody
 {
 public:
-    CLAHE_CalcLut_Body(const cv::Mat& src, const cv::Mat& lut, const cv::Size& tileSize, const int& tilesX, const int& clipLimit, const float& lutScale, const int& histSize, const int& shift) :
+    CLAHE_CalcLut_Body_Float(const cv::Mat& src, const cv::Mat& lut, const cv::Size& tileSize, const int& tilesX, const int& clipLimit, const float& lutScale, const int& histSize, const int& shift) :
         src_(src), lut_(lut), tileSize_(tileSize), tilesX_(tilesX), clipLimit_(clipLimit), lutScale_(lutScale), histSize_(histSize), shift_(shift)
     {
     }
@@ -29,7 +29,7 @@ private:
 };
 
 template <class T>
-void CLAHE_CalcLut_Body<T>::operator ()(const cv::Range& range) const
+void CLAHE_CalcLut_Body_Float<T>::operator ()(const cv::Range& range) const
 {
     T* tileLut = lut_.ptr<T>(range.start);
     const size_t lut_step = lut_.step / sizeof(T);
@@ -114,10 +114,10 @@ void CLAHE_CalcLut_Body<T>::operator ()(const cv::Range& range) const
 }
 
 template <class T>
-class CLAHE_Interpolation_Body : public cv::ParallelLoopBody
+class CLAHE_Interpolation_Body_Float : public cv::ParallelLoopBody
 {
 public:
-    CLAHE_Interpolation_Body(const cv::Mat& src, const cv::Mat& dst, const cv::Mat& lut, const cv::Size& tileSize, const int& tilesX, const int& tilesY, const int& shift) :
+    CLAHE_Interpolation_Body_Float(const cv::Mat& src, const cv::Mat& dst, const cv::Mat& lut, const cv::Size& tileSize, const int& tilesX, const int& tilesY, const int& shift) :
         src_(src), dst_(dst), lut_(lut), tileSize_(tileSize), tilesX_(tilesX), tilesY_(tilesY), shift_(shift)
     {
         buf.allocate(src.cols << 2);
@@ -165,7 +165,7 @@ private:
 };
 
 template <class T>
-void CLAHE_Interpolation_Body<T>::operator ()(const cv::Range& range) const
+void CLAHE_Interpolation_Body_Float<T>::operator ()(const cv::Range& range) const
 {
     float inv_th = 1.0f / tileSize_.height;
 
@@ -201,6 +201,148 @@ void CLAHE_Interpolation_Body<T>::operator ()(const cv::Range& range) const
         }
     }
 }
+
+class CLAHE_Impl_Float CV_FINAL : public CLAHE_Float
+{
+public:
+    CLAHE_Impl_Float(double clipLimit = 40.0, int tilesX = 8, int tilesY = 8, int bitShift = 0);
+
+    void apply(cv::InputArray src, cv::OutputArray dst) CV_OVERRIDE;
+
+    void setClipLimit(double clipLimit) CV_OVERRIDE;
+    double getClipLimit() const CV_OVERRIDE;
+
+    void setTilesGridSize(cv::Size tileGridSize) CV_OVERRIDE;
+    cv::Size getTilesGridSize() const CV_OVERRIDE;
+
+    void setBitShift(int bitShift) CV_OVERRIDE;
+    int getBitShift() const CV_OVERRIDE;
+
+    void collectGarbage() CV_OVERRIDE;
+
+private:
+    double clipLimit_;
+    int tilesX_;
+    int tilesY_;
+    int bitShift_;
+
+    cv::Mat srcExt_;
+    cv::Mat lut_;
+};
+
+CLAHE_Impl_Float::CLAHE_Impl_Float(double clipLimit, int tilesX, int tilesY, int bitShift) :
+    clipLimit_(clipLimit), tilesX_(tilesX), tilesY_(tilesY), bitShift_(bitShift)
+{
+}
+
+void CLAHE_Impl_Float::apply(cv::InputArray _src, cv::OutputArray _dst)
+{
+    CV_Assert(_src.type() == CV_8UC1 || _src.type() == CV_16UC1);
+
+    int histSize = _src.type() == CV_8UC1 ? (256 >> bitShift_) : (65536 >> bitShift_);
+
+    cv::Size tileSize;
+    cv::_InputArray _srcForLut;
+
+    if (_src.size().width % tilesX_ == 0 && _src.size().height % tilesY_ == 0)
+    {
+        tileSize = cv::Size(_src.size().width / tilesX_, _src.size().height / tilesY_);
+        _srcForLut = _src;
+    }
+    else
+    {
+        cv::copyMakeBorder(_src, srcExt_, 0, tilesY_ - (_src.size().height % tilesY_), 0, tilesX_ - (_src.size().width % tilesX_), cv::BORDER_REFLECT_101);
+        tileSize = cv::Size(srcExt_.size().width / tilesX_, srcExt_.size().height / tilesY_);
+        _srcForLut = srcExt_;
+       
+    }
+
+    const int tileSizeTotal = tileSize.area();
+    const float lutScale = static_cast<float>(histSize - 1) / tileSizeTotal;
+
+    int clipLimit = 0;
+    if (clipLimit_ > 0.0)
+    {
+        clipLimit = static_cast<int>(clipLimit_ * tileSizeTotal / histSize);
+        clipLimit = std::max(clipLimit, 1);
+    }
+
+    cv::Mat src = _src.getMat();
+    _dst.create(src.size(), src.type());
+    cv::Mat dst = _dst.getMat();
+    cv::Mat srcForLut = _srcForLut.getMat();
+    lut_.create(tilesX_ * tilesY_, histSize, _src.type());
+
+    cv::Ptr<cv::ParallelLoopBody> calcLutBody;
+    if (_src.type() == CV_8UC1)
+    {
+        calcLutBody = cv::makePtr<CLAHE_CalcLut_Body_Float<uchar> >(srcForLut, lut_, tileSize, tilesX_, clipLimit, lutScale, histSize, bitShift_);
+    }
+    else if (_src.type() == CV_16UC1)
+    {
+        calcLutBody = cv::makePtr<CLAHE_CalcLut_Body_Float<ushort> >(srcForLut, lut_, tileSize, tilesX_, clipLimit, lutScale, histSize, bitShift_);
+    }
+    else
+        CV_Error(cv::Error::StsBadArg, "Unsupported type");
+
+    cv::parallel_for_(cv::Range(0, tilesX_ * tilesY_), *calcLutBody);
+
+    cv::Ptr<cv::ParallelLoopBody> interpolationBody;
+    if (_src.type() == CV_8UC1)
+    {
+        interpolationBody = cv::makePtr<CLAHE_Interpolation_Body_Float<uchar> >(src, dst, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+    }
+    else if (_src.type() == CV_16UC1)
+    {
+        interpolationBody = cv::makePtr<CLAHE_Interpolation_Body_Float<ushort> >(src, dst, lut_, tileSize, tilesX_, tilesY_, bitShift_);
+    }
+
+    cv::parallel_for_(cv::Range(0, src.rows), *interpolationBody);
+}
+
+void CLAHE_Impl_Float::setClipLimit(double clipLimit)
+{
+    clipLimit_ = clipLimit;
+}
+
+double CLAHE_Impl_Float::getClipLimit() const
+{
+    return clipLimit_;
+}
+
+void CLAHE_Impl_Float::setTilesGridSize(cv::Size tileGridSize)
+{
+    tilesX_ = tileGridSize.width;
+    tilesY_ = tileGridSize.height;
+}
+
+cv::Size CLAHE_Impl_Float::getTilesGridSize() const
+{
+    return cv::Size(tilesX_, tilesY_);
+}
+
+void CLAHE_Impl_Float::setBitShift(int bitShift)
+{
+    bitShift_ = bitShift;
+}
+
+int CLAHE_Impl_Float::getBitShift() const
+{
+    return bitShift_;
+}
+
+void CLAHE_Impl_Float::collectGarbage()
+{
+    srcExt_.release();
+    lut_.release();
+}
+
+cv::Ptr<CLAHE_Float> createCLAHE_Float(double clipLimit, cv::Size tileGridSize)
+{
+    return cv::makePtr<CLAHE_Impl_Float>(clipLimit, tileGridSize.width, tileGridSize.height);
+}
+
+/*----------------------------------------------------------------------定点计算------------------------------------------------------------------------------------------*/
 
 
 template <class T>
@@ -468,8 +610,8 @@ void CLAHE_Interpolation_Body_Fixed<T>::operator ()(const cv::Range& range) cons
 
     uint16_t cur_min = result_min_.load(std::memory_order_relaxed);
     while (local_min < cur_min && !result_min_.compare_exchange_weak(cur_min, local_min, std::memory_order_relaxed))
-		;
-	uint16_t cur_max = result_max_.load(std::memory_order_relaxed);
+        ;
+    uint16_t cur_max = result_max_.load(std::memory_order_relaxed);
     while (local_max > cur_max && !result_max_.compare_exchange_weak(cur_max, local_max, std::memory_order_relaxed))
         ;
 }
@@ -493,7 +635,7 @@ public:
     void collectGarbage() CV_OVERRIDE;
 
     uint16_t getGlobalMin() const CV_OVERRIDE;
-	uint16_t getGlobalMax() const CV_OVERRIDE;
+    uint16_t getGlobalMax() const CV_OVERRIDE;
 
 private:
     int clipLimit_;
@@ -573,11 +715,11 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
         cv::Ptr<cv::ParallelLoopBody> calcLutBody_cv;
         if (_src.type() == CV_8UC1)
         {
-            calcLutBody_cv = cv::makePtr<CLAHE_CalcLut_Body<uchar> >(srcForLut, lut_cv, tileSize, tilesX_, clipLimit, lutScale_cv, histSize, bitShift_);
+            calcLutBody_cv = cv::makePtr<CLAHE_CalcLut_Body_Float<uchar> >(srcForLut, lut_cv, tileSize, tilesX_, clipLimit, lutScale_cv, histSize, bitShift_);
         }
         else if (_src.type() == CV_16UC1)
         {
-            calcLutBody_cv = cv::makePtr<CLAHE_CalcLut_Body<ushort> >(srcForLut, lut_cv, tileSize, tilesX_, clipLimit, lutScale_cv, histSize, bitShift_);
+            calcLutBody_cv = cv::makePtr<CLAHE_CalcLut_Body_Float<ushort> >(srcForLut, lut_cv, tileSize, tilesX_, clipLimit, lutScale_cv, histSize, bitShift_);
         }
         else
             CV_Error(cv::Error::StsBadArg, "Unsupported type");
@@ -599,8 +741,8 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
     {
         auto body = cv::makePtr<CLAHE_Interpolation_Body_Fixed<uchar> >(src, dst, lut_, tileSize, tilesX_, tilesY_, bitShift_);
         cv::parallel_for_(cv::Range(0, src.rows), *body);
-		global_min_ = body->get_min();
-		global_max_ = body->get_max();
+        global_min_ = body->get_min();
+        global_max_ = body->get_max();
     }
     else if (_src.type() == CV_16UC1)
     {
@@ -617,11 +759,11 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
         cv::Ptr<cv::ParallelLoopBody> interpolationBody_cv;
         if (_src.type() == CV_8UC1)
         {
-            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body<uchar> >(src, dst_cv, lut_cv, tileSize, tilesX_, tilesY_, bitShift_);
+            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body_Float<uchar> >(src, dst_cv, lut_cv, tileSize, tilesX_, tilesY_, bitShift_);
         }
         else if (_src.type() == CV_16UC1)
         {
-            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body<ushort> >(src, dst_cv, lut_cv, tileSize, tilesX_, tilesY_, bitShift_);
+            interpolationBody_cv = cv::makePtr<CLAHE_Interpolation_Body_Float<ushort> >(src, dst_cv, lut_cv, tileSize, tilesX_, tilesY_, bitShift_);
         }
         cv::parallel_for_(cv::Range(0, src.rows), *interpolationBody_cv);
     }
@@ -691,6 +833,7 @@ cv::Ptr<CLAHE_Fixed> createCLAHE_Fixed(int clipLimit, cv::Size tileGridSize)
     return cv::makePtr<CLAHE_Impl_Fixed>(clipLimit, tileGridSize.width, tileGridSize.height);
 }
 
+/*==================================================================================================================================================*/
 
 int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
 {
@@ -704,7 +847,7 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
     uint16_t in_min = src.ptr<uint16_t>()[0];
     uint16_t in_max = src.ptr<uint16_t>()[0];
 
-    for (int i = 1; i < h; ++i)
+    for (int i = 0; i < h; ++i)
     {
         const auto* psrc = src.ptr<uint16_t>(i);
         for (int j = 0; j < w; ++j)
@@ -718,15 +861,15 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
     if (range == 0) range = 1;
 
     // Step2: 预计算 scale，帧头一次性整数除法
-    constexpr int      Q = 16;
+    constexpr int      LQ = 16;
     constexpr uint32_t OUT_MAX = 255;
-    constexpr uint32_t ROUND = 1 << (Q - 1); // 四舍五入偏移
+    constexpr uint32_t ROUND = 1 << (LQ - 1); // 四舍五入偏移
     //uint32_t scale_fixed = ((OUT_MAX << Q) + range / 2) / range;
-    uint32_t scale_fixed = ((OUT_MAX << (Q + 1)) / range + 1) >> 1;
+    uint32_t scale_fixed = ((OUT_MAX << (LQ + 1)) / range + 1) >> 1;
 
     // Step3: 逐像素映射
     cv::Mat  dst(src.size(), CV_8UC1);
-    for (int i = 1; i < h; ++i)
+    for (int i = 0; i < h; ++i)
     {
         const auto* psrc = src.ptr<uint16_t>(i);
         auto* pdst = dst.ptr<uint8_t>(i);
@@ -734,7 +877,7 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
         {
             uint32_t val = cv::saturate_cast<uint32_t>(psrc[j]);
             uint32_t diff = val - cv::saturate_cast<uint32_t>(in_min);
-            uint32_t res = (diff * scale_fixed + ROUND) >> Q;
+            uint32_t res = (diff * scale_fixed + ROUND) >> LQ;
             pdst[j] = cv::saturate_cast<uint8_t>(res);
         }
     }
@@ -743,6 +886,93 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
     return 0;
 }
 
+class SSR_Fixed
+{
+public:
+    SSR_Fixed(int logQ = 16, int gaussQ = 16, int linearQ = 16, int sigma = 50) : LOG_Q_(logQ), GAUSS_Q_(gaussQ), LINEAR_Q_(linearQ), sigma_(sigma)
+    {
+        // 预计算 log LUT
+        log_lut_.create(1, 16384, CV_32SC1);
+		auto* ptr = log_lut_.ptr<int>(0);
+        for (int i = 0; i < 16384; ++i)
+        {
+            double log_norm = 1.0 + cv::saturate_cast<double>(i) / 16384.0;
+            double log_val = std::log(log_norm);
+
+            int fixed_log = cv::saturate_cast<int>(log_val * cv::saturate_cast<double>(1 << LOG_Q_));
+            ptr[i] = fixed_log;
+        }
+    }
+
+    int apply(cv::InputArray input, cv::OutputArray output);
+
+private:
+    cv::Mat log_lut_;
+    int LOG_Q_;
+    int GAUSS_Q_;
+    int sigma_;
+    int LINEAR_Q_;
+};
+
+int SSR_Fixed::apply(cv::InputArray input, cv::OutputArray output)
+{
+    cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    // 1. 高斯模糊（定点实现）
+    cv::Mat gauss;
+    cv::GaussianBlur(src, gauss, cv::Size(0, 0), sigma_);
+
+    // 2. 对数变换（定点实现）
+    cv::Mat log_reflectance(src.size(), CV_32SC1);
+	int min_ref = INT_MAX;
+	int max_ref = INT_MIN;
+    const auto* ptr_lut = log_lut_.ptr<int>(0);
+    for (int i = 0; i < src.rows; ++i)
+    {
+        const auto* psrc = src.ptr<uint16_t>(i);
+        const auto* pgauss = gauss.ptr<uint16_t>(i);
+        auto* plog = log_reflectance.ptr<int>(i);
+        for (int j = 0; j < src.cols; ++j)
+        {
+			int src_val = cv::saturate_cast<int>(psrc[j]);
+			int gauss_val = cv::saturate_cast<int>(pgauss[j]);
+            int res = ptr_lut[src_val] - ptr_lut[gauss_val];
+			plog[j] = res;
+
+			if (res < min_ref) min_ref = res;
+			if (res > max_ref) max_ref = res;
+        }
+    }
+
+	int range = max_ref - min_ref;
+    if (range == 0) range = 1;
+
+    constexpr int OUT_MAX = 255;
+    int ROUND = 1 << (LINEAR_Q_ - 1); // 四舍五入偏移
+    int scale_fixed = ((OUT_MAX << (LINEAR_Q_ + 1)) / range + 1) >> 1;
+
+    // Step3: 逐像素映射
+    cv::Mat  dst(src.size(), CV_8UC1, cv::Scalar(0));
+    for (int i = 0; i < src.rows; ++i)
+    {
+        const auto* plog = log_reflectance.ptr<int>(i);
+        auto* pdst = dst.ptr<uint8_t>(i);
+        for (int j = 0; j < src.cols; ++j)
+        {
+            int val = plog[j];
+            int diff = val - min_ref;
+            int res = (diff * scale_fixed + ROUND) >> LINEAR_Q_;
+            pdst[j] = cv::saturate_cast<uint8_t>(res);
+        }
+    }
+
+    output.assign(dst);
+    return 0;
+}
+
+
+/*========================================================================误差计算==============================================================================*/
 
 struct PrecisionReport
 {
@@ -758,16 +988,19 @@ PrecisionReport test_clahe_precision_14to8(
     int clipLimit,
     cv::Size tileSize)
 {
-	cv::Mat img14bit = input.getMat();
+    cv::Mat img14bit = input.getMat();
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
 
     // 浮点参考版本
     cv::Mat ref_out;
-	clahe_mapping(img14bit, ref_out, clipLimit, tileSize);
+    //clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
+    single_scale_retinex(img14bit, ref_out, 50);
 
     // 定点量化版本
     cv::Mat fixed_out;
-	clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
+    //clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
+    cv::Ptr<SSR_Fixed> ssr = cv::makePtr<SSR_Fixed>(16, 24, 16, 50);
+	ssr->apply(img14bit, fixed_out);
 
     //8bit
     CV_Assert(ref_out.size() == fixed_out.size());
@@ -820,8 +1053,9 @@ PrecisionReport test_clahe_precision_14to8(
     printf(">1LSB 像素   : %d / %d (%.3f%%)\n",
         rpt.over_1lsb, n, rpt.over_1lsb_pct);
 
-	cv::normalize(residual_map, residual_map, 0, 255, cv::NORM_MINMAX);
-	imwrite_mdy_private(residual_map, "residual_map.png");
+    cv::Mat residual_norm;
+    cv::normalize(residual_map, residual_norm, 0, 255, cv::NORM_MINMAX);
+    imwrite_mdy_private(residual_norm, "residual_map.png");
 
     return rpt;
 }
@@ -857,7 +1091,7 @@ int test_clahe_precision_batch_14to8()
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
         cv::subtract(16383, src, src);
 
-		images.push_back(src);
+        images.push_back(src);
     }
 
     PrecisionReport avg{};

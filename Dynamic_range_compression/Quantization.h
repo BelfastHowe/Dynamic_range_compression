@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Dynamic_range_compression.h"
 
@@ -13,6 +13,28 @@ constexpr int W_BITS = 18;
 constexpr uint64_t W_ROUND_OFFSET = 1ULL << (W_BITS - 1);
 constexpr uint64_t W_ROUND = 1ULL << (2 * W_BITS - 1); // 用于最后双重乘法后的四舍五入
 
+
+class CLAHE_Float : public cv::Algorithm
+{
+public:
+    virtual void apply(cv::InputArray src, cv::OutputArray dst) = 0;
+
+    virtual void setClipLimit(double clipLimit) = 0;
+
+    virtual double getClipLimit() const = 0;
+
+    virtual void setTilesGridSize(cv::Size tileGridSize) = 0;
+
+    virtual cv::Size getTilesGridSize() const = 0;
+
+    virtual void setBitShift(int bitShift) = 0;
+
+    virtual int getBitShift() const = 0;
+
+    virtual void collectGarbage() = 0;
+};
+
+cv::Ptr<CLAHE_Float> createCLAHE_Float(double clipLimit = 40.0, cv::Size tileGridSize = cv::Size(8, 8));
 
 class CLAHE_Fixed : public cv::Algorithm
 {

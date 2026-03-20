@@ -16,6 +16,7 @@ int imwrite_mdy_private(cv::InputArray input, const std::string file_name);
 // 百分位映射函数，将输入图像的像素值根据指定的低百分位和高百分位进行线性映射，输出8位图像
 int percentile_mapping(cv::InputArray input, cv::OutputArray output, double lowPct, double highPct);
 
+int single_scale_retinex(cv::InputArray input, cv::OutputArray output, double sigma);
 
 // 多尺度Retinex算法实现，输入为单通道16位图像，输出为单通道16位图像，sigmas为高斯模糊的标准差列表
 int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std::vector<double>& sigmas);
