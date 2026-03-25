@@ -205,7 +205,7 @@ void CLAHE_Interpolation_Body_Float<T>::operator ()(const cv::Range& range) cons
 class CLAHE_Impl_Float CV_FINAL : public CLAHE_Float
 {
 public:
-    CLAHE_Impl_Float(double clipLimit = 40.0, int tilesX = 8, int tilesY = 8, int bitShift = 0);
+    CLAHE_Impl_Float(double clipLimit = 40.0, int tilesX = 8, int tilesY = 8, int histSize = 0, int bitShift = 0);
 
     void apply(cv::InputArray src, cv::OutputArray dst) CV_OVERRIDE;
 
@@ -225,13 +225,14 @@ private:
     int tilesX_;
     int tilesY_;
     int bitShift_;
+    int histSize_;
 
     cv::Mat srcExt_;
     cv::Mat lut_;
 };
 
-CLAHE_Impl_Float::CLAHE_Impl_Float(double clipLimit, int tilesX, int tilesY, int bitShift) :
-    clipLimit_(clipLimit), tilesX_(tilesX), tilesY_(tilesY), bitShift_(bitShift)
+CLAHE_Impl_Float::CLAHE_Impl_Float(double clipLimit, int tilesX, int tilesY, int histSize, int bitShift) :
+    clipLimit_(clipLimit), tilesX_(tilesX), tilesY_(tilesY), histSize_(histSize), bitShift_(bitShift)
 {
 }
 
@@ -239,7 +240,8 @@ void CLAHE_Impl_Float::apply(cv::InputArray _src, cv::OutputArray _dst)
 {
     CV_Assert(_src.type() == CV_8UC1 || _src.type() == CV_16UC1);
 
-    int histSize = _src.type() == CV_8UC1 ? (256 >> bitShift_) : (65536 >> bitShift_);
+    int histSize = histSize_ > 0 ? histSize_ : (_src.type() == CV_8UC1 ? (256 >> bitShift_) : (65536 >> bitShift_));
+    //int histSize = _src.type() == CV_8UC1 ? (256 >> bitShift_) : (65536 >> bitShift_);
 
     cv::Size tileSize;
     cv::_InputArray _srcForLut;
@@ -337,9 +339,9 @@ void CLAHE_Impl_Float::collectGarbage()
     lut_.release();
 }
 
-cv::Ptr<CLAHE_Float> createCLAHE_Float(double clipLimit, cv::Size tileGridSize)
+cv::Ptr<CLAHE_Float> createCLAHE_Float(double clipLimit, cv::Size tileGridSize, int histSize)
 {
-    return cv::makePtr<CLAHE_Impl_Float>(clipLimit, tileGridSize.width, tileGridSize.height);
+    return cv::makePtr<CLAHE_Impl_Float>(clipLimit, tileGridSize.width, tileGridSize.height, histSize);
 }
 
 /*----------------------------------------------------------------------定点计算------------------------------------------------------------------------------------------*/
@@ -619,7 +621,7 @@ void CLAHE_Interpolation_Body_Fixed<T>::operator ()(const cv::Range& range) cons
 class CLAHE_Impl_Fixed CV_FINAL : public CLAHE_Fixed
 {
 public:
-    CLAHE_Impl_Fixed(int clipLimit = 40, int tilesX = 8, int tilesY = 8, int bitShift = 0);
+    CLAHE_Impl_Fixed(int clipLimit = 40, int tilesX = 8, int tilesY = 8, int histSize = 0, int bitShift = 0);
 
     void apply(cv::InputArray src, cv::OutputArray dst) CV_OVERRIDE;
 
@@ -642,6 +644,7 @@ private:
     int tilesX_;
     int tilesY_;
     int bitShift_;
+	int histSize_;
 
     cv::Mat srcExt_;
     cv::Mat lut_;
@@ -650,8 +653,8 @@ private:
     uint16_t global_max_ = 0;
 };
 
-CLAHE_Impl_Fixed::CLAHE_Impl_Fixed(int clipLimit, int tilesX, int tilesY, int bitShift) :
-    clipLimit_(clipLimit), tilesX_(tilesX), tilesY_(tilesY), bitShift_(bitShift)
+CLAHE_Impl_Fixed::CLAHE_Impl_Fixed(int clipLimit, int tilesX, int tilesY, int histSize, int bitShift) :
+    clipLimit_(clipLimit), tilesX_(tilesX), tilesY_(tilesY), histSize_(histSize), bitShift_(bitShift)
 {
 }
 
@@ -659,7 +662,8 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
 {
     CV_Assert(_src.type() == CV_8UC1 || _src.type() == CV_16UC1);
 
-    int histSize = _src.type() == CV_8UC1 ? (256 >> bitShift_) : (65536 >> bitShift_);
+	int histSize = histSize_ > 0 ? histSize_ : (_src.type() == CV_8UC1 ? (256 >> bitShift_) : (65536 >> bitShift_));
+    //int histSize = _src.type() == CV_8UC1 ? (256 >> bitShift_) : (65536 >> bitShift_);
 
     cv::Size tileSize;
     cv::_InputArray _srcForLut;
@@ -828,9 +832,9 @@ uint16_t CLAHE_Impl_Fixed::getGlobalMax() const
 }
 
 
-cv::Ptr<CLAHE_Fixed> createCLAHE_Fixed(int clipLimit, cv::Size tileGridSize)
+cv::Ptr<CLAHE_Fixed> createCLAHE_Fixed(int clipLimit, cv::Size tileGridSize, int histSize)
 {
-    return cv::makePtr<CLAHE_Impl_Fixed>(clipLimit, tileGridSize.width, tileGridSize.height);
+    return cv::makePtr<CLAHE_Impl_Fixed>(clipLimit, tileGridSize.width, tileGridSize.height, histSize);
 }
 
 /*==================================================================================================================================================*/
@@ -886,14 +890,159 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
     return 0;
 }
 
+class Gaussian_Blur_Fixed
+{
+public:
+    enum class BorderType { REFLECT_101, REFLECT };
+
+    Gaussian_Blur_Fixed(int sigma, int gaussQ, BorderType border = BorderType::REFLECT_101)
+        : border_(border), gaussQ_(gaussQ)
+    {
+        build_kernel(sigma);
+        gauss_Round_ = 1LL << (2 * gaussQ_ - 1);
+        right_move_ = std::max(0, 16 + gaussQ_ - 31);
+    }
+
+    // sigma 变化时重新构建核
+    void set_sigma(int sigma)
+    {
+        build_kernel(sigma);
+    }
+
+    // 输入输出均为 CV_16UC1
+    int apply(cv::InputArray input, cv::OutputArray output) const
+    {
+		cv::Mat src = input.getMat();
+        CV_Assert(src.type() == CV_16UC1);
+
+        int rows = src.rows, cols = src.cols;
+
+        // 水平方向
+        cv::Mat tmp(src.size(), CV_32SC1);
+        for (int r = 0; r < rows; ++r)
+        {
+            const auto* ps = src.ptr<uint16_t>(r);
+            auto* pt = tmp.ptr<int32_t>(r);
+            for (int c = 0; c < cols; ++c)
+            {
+                int64_t acc = 0;
+                for (int k = 0; k < ksize_; ++k)
+                {
+                    int cc = border_idx(c + k - half_, cols);
+                    acc += cv::saturate_cast<int64_t>(ps[cc]) * cv::saturate_cast<int64_t>(kernel_[k]);
+                }
+                pt[c] = cv::saturate_cast<int32_t>(acc >> right_move_);
+            }
+        }
+
+        // 垂直方向
+        output.create(src.size(), CV_16UC1);
+		auto dst = output.getMat();
+        for (int r = 0; r < rows; ++r)
+        {
+            auto* pd = dst.ptr<uint16_t>(r);
+            for (int c = 0; c < cols; ++c)
+            {
+                int64_t acc = 0;
+                for (int k = 0; k < ksize_; ++k)
+                {
+                    int rr = border_idx(r + k - half_, rows);
+                    auto tmp_val = cv::saturate_cast<int64_t>(tmp.ptr<int32_t>(rr)[c]) << right_move_;
+                    acc += tmp_val * cv::saturate_cast<int64_t>(kernel_[k]);
+                }
+                pd[c] = cv::saturate_cast<uint16_t>((acc + gauss_Round_) >> (gaussQ_ * 2));
+            }
+        }
+
+        return 0;
+    }
+
+    int ksize() const { return ksize_; }
+    int sigma() const { return sigma_; }
+
+    const std::vector<int32_t>& kernel() const { return kernel_; }
+	const std::vector<int32_t>& cv_kernel() const { return cv_kernel_; }
+
+private:
+    void build_kernel(int sigma)
+    {
+        sigma_ = sigma;
+        ksize_ = std::max(3, cv::saturate_cast<int>(sigma * 8 + 1) | 1);
+        half_ = ksize_ / 2;
+
+        bool use_cv = true;
+        if(use_cv)
+        {
+            cv::Mat kx = cv::getGaussianKernel(ksize_, sigma, CV_32F);
+            cv_kernel_.resize(ksize_);
+            int q_sum = 0;
+            for (int i = 0; i < ksize_; ++i)
+            {
+                cv_kernel_[i] = cv::saturate_cast<int32_t>(kx.at<float>(i) * (1 << gaussQ_));
+                q_sum += cv_kernel_[i];
+            }
+            cv_kernel_[half_] += ((1 << gaussQ_) - q_sum); // 修正舍入误差，保证归一化
+		}
+
+        std::vector<float> kf(ksize_);
+        float sum = 0;
+        for (int i = 0; i < ksize_; ++i)
+        {
+            float x = cv::saturate_cast<float>(i - half_);
+            kf[i] = std::exp(-x * x / (2.0f * sigma * sigma));
+            sum += kf[i];
+        }
+
+        kernel_.resize(ksize_);
+        int q_sum = 0;
+        for (int i = 0; i < ksize_; ++i)
+        {
+            kernel_[i] = cv::saturate_cast<int32_t>(kf[i] / sum * (1 << gaussQ_));
+            q_sum += kernel_[i];
+        }
+        kernel_[half_] += ((1 << gaussQ_) - q_sum); // 修正舍入误差，保证归一化
+    }
+
+    inline int border_idx(int i, int n) const
+    {
+        if (border_ == BorderType::REFLECT_101)
+        {
+            while (i < 0 || i >= n)
+            {
+                if (i < 0)  i = -i;
+                if (i >= n) i = 2 * (n - 1) - i;
+            }
+        }
+        else
+        {
+            while (i < 0 || i >= n)
+            {
+                if (i < 0)  i = -i - 1;
+                if (i >= n) i = 2 * n - i - 1;
+            }
+        }
+        return i;
+    }
+
+    int                 sigma_;
+	int                 gaussQ_;
+	int64_t             gauss_Round_;
+	int                 right_move_;
+    int                 ksize_;
+    int                 half_;
+    BorderType          border_;
+    std::vector<int32_t> kernel_;
+	std::vector<int32_t> cv_kernel_;
+};
+
 class SSR_Fixed
 {
 public:
-    SSR_Fixed(int logQ = 16, int gaussQ = 16, int linearQ = 16, int sigma = 50) : LOG_Q_(logQ), GAUSS_Q_(gaussQ), LINEAR_Q_(linearQ), sigma_(sigma)
+    SSR_Fixed(int logQ = 16, int linearQ = 16, cv::Ptr<Gaussian_Blur_Fixed> gauss_ptr = cv::makePtr<Gaussian_Blur_Fixed>(50, 16)) : LOG_Q_(logQ), LINEAR_Q_(linearQ), gauss_ptr_(gauss_ptr)
     {
         // 预计算 log LUT
         log_lut_.create(1, 16384, CV_32SC1);
-		auto* ptr = log_lut_.ptr<int>(0);
+        auto* ptr = log_lut_.ptr<int>(0);
         for (int i = 0; i < 16384; ++i)
         {
             double log_norm = 1.0 + cv::saturate_cast<double>(i) / 16384.0;
@@ -909,8 +1058,9 @@ public:
 private:
     cv::Mat log_lut_;
     int LOG_Q_;
-    int GAUSS_Q_;
-    int sigma_;
+    //int GAUSS_Q_;
+    //int sigma_;
+    cv::Ptr<Gaussian_Blur_Fixed> gauss_ptr_;
     int LINEAR_Q_;
 };
 
@@ -921,7 +1071,8 @@ int SSR_Fixed::apply(cv::InputArray input, cv::OutputArray output)
 
     // 1. 高斯模糊（定点实现）
     cv::Mat gauss;
-    cv::GaussianBlur(src, gauss, cv::Size(0, 0), sigma_);
+    //cv::GaussianBlur(src, gauss, cv::Size(0, 0), gauss_ptr_->sigma());
+	gauss_ptr_->apply(src, gauss);
 
     // 2. 对数变换（定点实现）
     cv::Mat log_reflectance(src.size(), CV_32SC1);
@@ -983,10 +1134,11 @@ struct PrecisionReport
     double over_1lsb_pct = 0.0; // 占比  < 0.1%  可接受
 };
 
-PrecisionReport test_clahe_precision_14to8(
+PrecisionReport test_precision_14to8(
     cv::InputArray input,     // 原始 14bit 输入
     int clipLimit,
-    cv::Size tileSize)
+    cv::Size tileSize,
+    cv::Ptr<SSR_Fixed> ssr)
 {
     cv::Mat img14bit = input.getMat();
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
@@ -1060,7 +1212,7 @@ PrecisionReport test_clahe_precision_14to8(
     return rpt;
 }
 
-int test_clahe_precision_batch_14to8()
+int test_precision_batch_14to8()
 {
     int clipLimit = 3;
     cv::Size tileSize = cv::Size(8, 8);
@@ -1101,10 +1253,13 @@ int test_clahe_precision_batch_14to8()
     int    sum_over_1lsb = 0;
     double sum_over_1lsb_pct = 0;
 
+    auto gauss_ptr = cv::makePtr<Gaussian_Blur_Fixed>(50, 16);
+	auto ssr_ptr = cv::makePtr<SSR_Fixed>(16, 16, gauss_ptr);
+
     for (int i = 0; i < images.size(); ++i)
     {
         printf("--- 第 %d / %zu 张 ---\n", i + 1, images.size());
-        PrecisionReport rpt = test_clahe_precision_14to8(images[i], clipLimit, tileSize);
+        PrecisionReport rpt = test_precision_14to8(images[i], clipLimit, tileSize, ssr_ptr);
 
         sum_psnr += rpt.psnr;
         sum_mae += rpt.mae;

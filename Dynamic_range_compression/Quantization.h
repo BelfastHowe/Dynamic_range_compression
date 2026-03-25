@@ -34,7 +34,7 @@ public:
     virtual void collectGarbage() = 0;
 };
 
-cv::Ptr<CLAHE_Float> createCLAHE_Float(double clipLimit = 40.0, cv::Size tileGridSize = cv::Size(8, 8));
+cv::Ptr<CLAHE_Float> createCLAHE_Float(double clipLimit = 40.0, cv::Size tileGridSize = cv::Size(8, 8), int histSize = 0);
 
 class CLAHE_Fixed : public cv::Algorithm
 {
@@ -60,7 +60,7 @@ public:
     virtual uint16_t getGlobalMax() const = 0;
 };
 
-cv::Ptr<CLAHE_Fixed> createCLAHE_Fixed(int clipLimit = 40, cv::Size tileGridSize = cv::Size(8, 8));
+cv::Ptr<CLAHE_Fixed> createCLAHE_Fixed(int clipLimit = 40, cv::Size tileGridSize = cv::Size(8, 8), int histSize = 0);
 
-int test_clahe_precision_batch_14to8();
+int test_precision_batch_14to8();
 
