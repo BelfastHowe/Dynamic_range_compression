@@ -11,7 +11,23 @@ using Ms = std::chrono::duration<double, std::milli>;
 inline
 int imwrite_mdy_private(cv::InputArray input, const std::string file_name)
 {
-    cv::Mat src = input.getMat().clone();
+    cv::Mat src = input.getMat();
+
+    PWSTR desktop_path_w = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_Desktop, 0, NULL, &desktop_path_w);
+
+    if (FAILED(hr))
+    {
+        std::cerr << "获取桌面路径失败！" << std::endl;
+        return -1;
+    }
+
+    std::filesystem::path result_dir = std::filesystem::path(desktop_path_w) / "result";
+
+    CoTaskMemFree(desktop_path_w);
+    desktop_path_w = nullptr;
+
+    std::filesystem::create_directories(result_dir);
 
     auto now = std::chrono::system_clock::now();
     auto now_c = std::chrono::system_clock::to_time_t(now);
@@ -22,9 +38,10 @@ int imwrite_mdy_private(cv::InputArray input, const std::string file_name)
     std::ostringstream oss;
     oss << std::put_time(&now_tm, "%Y%m%d_%H%M%S_") << now.time_since_epoch().count() << std::string("_");
 
-    std::string output_file_name = std::string("C:\\Users\\Belfast\\Desktop\\result\\") + oss.str() + file_name + std::string(".png");
+    std::filesystem::path output_path = result_dir / (oss.str() + file_name + ".png");
+    std::string output_file_name = output_path.string();
 
-    std::cout << output_file_name << std::endl;
+    std::cout << "已保存至: " << output_file_name << std::endl;
     cv::imwrite(output_file_name, src);
     cv::waitKey(1);
 
@@ -108,7 +125,7 @@ int single_scale_retinex(cv::InputArray input, cv::OutputArray output, double si
     // 归一化到0-1
     cv::Mat src_normal;
     //cv::normalize(src, src_normal, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
-	src.convertTo(src_normal, CV_32F, 1.0 / 16384.0);
+    src.convertTo(src_normal, CV_32F, 1.0 / 16384.0);
     src_normal += 1.0f;
 
     // 对数域
@@ -469,8 +486,8 @@ int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, int clipLi
         {
             std::cerr << "Warning: CLAHE_Fixed global min/max mismatch! Computed: [" << in_min << ", " << in_max << "], Reported: [" 
                 << global_min << ", " << global_max << "]" << std::endl;
-			//global_min = in_min;
-			//global_max = in_max;
+            //global_min = in_min;
+            //global_max = in_max;
         }
     }
 

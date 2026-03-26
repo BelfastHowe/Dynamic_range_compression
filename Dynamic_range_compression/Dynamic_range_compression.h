@@ -2,12 +2,14 @@
 // 或项目特定的包含文件。
 
 #pragma once
+#define NOMINMAX
 
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <fstream>
 #include <filesystem>
 #include <cmath>
+#include <ShlObj.h>
 
 
 inline
