@@ -1,8 +1,12 @@
 ﻿#include "Quantization.h"
 #include <atomic>
 
+
+#define USE_CV_FILTER 1
+
 namespace fs = std::filesystem;
 
+using Ms = std::chrono::duration<double, std::milli>;
 
 
 template <class T>
@@ -687,7 +691,8 @@ void CLAHE_Impl_Fixed::apply(cv::InputArray _src, cv::OutputArray _dst)
     int clipLimit = 0;
     if (clipLimit_ > 0)
     {
-        clipLimit = (((clipLimit_ * tileSizeTotal) << 1) / histSize + 1) >> 1;
+        //clipLimit = (((clipLimit_ * tileSizeTotal) << 1) / histSize + 1) >> 1;
+		clipLimit = clipLimit_ * tileSizeTotal / histSize;
         clipLimit = std::max(clipLimit, 1);
     }
 
@@ -890,12 +895,12 @@ int linear_mapping_fixed(cv::InputArray input, cv::OutputArray output)
     return 0;
 }
 
-class Gaussian_Blur_Fixed
+class Gaussian_Blur_Impl_Fixed CV_FINAL : public Gaussian_Blur_Fixed
 {
 public:
     enum class BorderType { REFLECT_101, REFLECT };
 
-    Gaussian_Blur_Fixed(int sigma, int gaussQ, BorderType border = BorderType::REFLECT_101)
+    Gaussian_Blur_Impl_Fixed(int sigma, int gaussQ, BorderType border = BorderType::REFLECT_101)
         : border_(border), gaussQ_(gaussQ)
     {
         build_kernel(sigma);
@@ -904,19 +909,24 @@ public:
     }
 
     // sigma 变化时重新构建核
-    void set_sigma(int sigma)
+    void set_sigma(int sigma) CV_OVERRIDE
     {
         build_kernel(sigma);
     }
 
     // 输入输出均为 CV_16UC1
-    int apply(cv::InputArray input, cv::OutputArray output) const
+    int apply(cv::InputArray input, cv::OutputArray output) const CV_OVERRIDE
     {
 		cv::Mat src = input.getMat();
         CV_Assert(src.type() == CV_16UC1);
 
         int rows = src.rows, cols = src.cols;
 
+#if USE_CV_FILTER
+        output.create(src.size(), CV_16UC1);
+        auto dst = output.getMat();
+        cv::sepFilter2D(src, dst, CV_16U, kx_, kx_, cv::Point(-1, -1), 0, cv::BORDER_REFLECT101);
+#else
         // 水平方向
         cv::Mat tmp(src.size(), CV_32SC1);
         for (int r = 0; r < rows; ++r)
@@ -953,15 +963,16 @@ public:
                 pd[c] = cv::saturate_cast<uint16_t>((acc + gauss_Round_) >> (gaussQ_ * 2));
             }
         }
+#endif
 
         return 0;
     }
 
-    int ksize() const { return ksize_; }
-    int sigma() const { return sigma_; }
+    int ksize() const CV_OVERRIDE { return ksize_; }
+    int sigma() const CV_OVERRIDE { return sigma_; }
 
-    const std::vector<int32_t>& kernel() const { return kernel_; }
-	const std::vector<int32_t>& cv_kernel() const { return cv_kernel_; }
+    const std::vector<int32_t>& kernel() const CV_OVERRIDE { return kernel_; }
+	const std::vector<int32_t>& cv_kernel() const CV_OVERRIDE { return cv_kernel_; }
 
 private:
     void build_kernel(int sigma)
@@ -970,19 +981,17 @@ private:
         ksize_ = std::max(3, cv::saturate_cast<int>(sigma * 8 + 1) | 1);
         half_ = ksize_ / 2;
 
-        bool use_cv = true;
-        if(use_cv)
+#if USE_CV_FILTER
+        kx_ = cv::getGaussianKernel(ksize_, sigma, CV_32F);
+        cv_kernel_.resize(ksize_);
+        int cv_sum = 0;
+        for (int i = 0; i < ksize_; ++i)
         {
-            cv::Mat kx = cv::getGaussianKernel(ksize_, sigma, CV_32F);
-            cv_kernel_.resize(ksize_);
-            int q_sum = 0;
-            for (int i = 0; i < ksize_; ++i)
-            {
-                cv_kernel_[i] = cv::saturate_cast<int32_t>(kx.at<float>(i) * (1 << gaussQ_));
-                q_sum += cv_kernel_[i];
-            }
-            cv_kernel_[half_] += ((1 << gaussQ_) - q_sum); // 修正舍入误差，保证归一化
-		}
+            cv_kernel_[i] = cv::saturate_cast<int32_t>(kx_.at<float>(i) * (1 << gaussQ_));
+            cv_sum += cv_kernel_[i];
+        }
+        cv_kernel_[half_] += ((1 << gaussQ_) - cv_sum); // 修正舍入误差，保证归一化
+#endif
 
         std::vector<float> kf(ksize_);
         float sum = 0;
@@ -1033,12 +1042,18 @@ private:
     BorderType          border_;
     std::vector<int32_t> kernel_;
 	std::vector<int32_t> cv_kernel_;
+    cv::Mat             kx_;
 };
 
-class SSR_Fixed
+cv::Ptr<Gaussian_Blur_Fixed> createGaussianBlur_Fixed(int sigma, int gaussQ)
+{
+    return cv::makePtr<Gaussian_Blur_Impl_Fixed>(sigma, gaussQ);
+}
+
+class SSR_Impl_Fixed CV_FINAL : public SSR_Fixed
 {
 public:
-    SSR_Fixed(int logQ = 16, int linearQ = 16, cv::Ptr<Gaussian_Blur_Fixed> gauss_ptr = cv::makePtr<Gaussian_Blur_Fixed>(50, 16)) : LOG_Q_(logQ), LINEAR_Q_(linearQ), gauss_ptr_(gauss_ptr)
+    SSR_Impl_Fixed(int logQ = 16, int linearQ = 16, cv::Ptr<Gaussian_Blur_Fixed> gauss_ptr = nullptr) : LOG_Q_(logQ), LINEAR_Q_(linearQ), gauss_ptr_(gauss_ptr)
     {
         // 预计算 log LUT
         log_lut_.create(1, 16384, CV_32SC1);
@@ -1053,7 +1068,7 @@ public:
         }
     }
 
-    int apply(cv::InputArray input, cv::OutputArray output);
+    int apply(cv::InputArray input, cv::OutputArray output) CV_OVERRIDE;
 
 private:
     cv::Mat log_lut_;
@@ -1064,15 +1079,19 @@ private:
     int LINEAR_Q_;
 };
 
-int SSR_Fixed::apply(cv::InputArray input, cv::OutputArray output)
+int SSR_Impl_Fixed::apply(cv::InputArray input, cv::OutputArray output)
 {
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    auto tm1 = std::chrono::high_resolution_clock::now();
 
     // 1. 高斯模糊（定点实现）
     cv::Mat gauss;
     //cv::GaussianBlur(src, gauss, cv::Size(0, 0), gauss_ptr_->sigma());
 	gauss_ptr_->apply(src, gauss);
+
+    auto tm2 = std::chrono::high_resolution_clock::now();
 
     // 2. 对数变换（定点实现）
     cv::Mat log_reflectance(src.size(), CV_32SC1);
@@ -1096,6 +1115,8 @@ int SSR_Fixed::apply(cv::InputArray input, cv::OutputArray output)
         }
     }
 
+    auto tm3 = std::chrono::high_resolution_clock::now();
+
 	int range = max_ref - min_ref;
     if (range == 0) range = 1;
 
@@ -1118,8 +1139,24 @@ int SSR_Fixed::apply(cv::InputArray input, cv::OutputArray output)
         }
     }
 
+    auto tm4 = std::chrono::high_resolution_clock::now();
+
+	auto td1 = Ms(tm2 - tm1).count();
+	auto td2 = Ms(tm3 - tm2).count();
+	auto td3 = Ms(tm4 - tm3).count();
+
     output.assign(dst);
     return 0;
+}
+
+cv::Ptr<SSR_Fixed> createSSR_Fixed(int logQ, int linearQ, cv::Ptr<Gaussian_Blur_Fixed> gauss_ptr)
+{
+    // 如果外部没传高斯指针，内部创建一个
+    if (gauss_ptr.empty())
+    {
+        gauss_ptr = createGaussianBlur_Fixed(50, 16);
+    }
+    return cv::makePtr<SSR_Impl_Fixed>(logQ, linearQ, gauss_ptr);
 }
 
 
@@ -1145,14 +1182,14 @@ PrecisionReport test_precision_14to8(
 
     // 浮点参考版本
     cv::Mat ref_out;
-    clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
-    //single_scale_retinex(img14bit, ref_out, 50);
+    //clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
+    single_scale_retinex(img14bit, ref_out, 50);
 
     // 定点量化版本
     cv::Mat fixed_out;
-    clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
+    //clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
     //cv::Ptr<SSR_Fixed> ssr = cv::makePtr<SSR_Fixed>(16, 24, 16, 50);
-	//ssr->apply(img14bit, fixed_out);
+	ssr->apply(img14bit, fixed_out);
 
     //8bit
     CV_Assert(ref_out.size() == fixed_out.size());
@@ -1214,7 +1251,7 @@ PrecisionReport test_precision_14to8(
 
 int test_precision_batch_14to8()
 {
-    int clipLimit = 3;
+    int clipLimit = 128;
     cv::Size tileSize = cv::Size(8, 8);
 
     fs::path inputDir(IMAGE_DIR);
@@ -1253,8 +1290,8 @@ int test_precision_batch_14to8()
     int    sum_over_1lsb = 0;
     double sum_over_1lsb_pct = 0;
 
-    auto gauss_ptr = cv::makePtr<Gaussian_Blur_Fixed>(50, 16);
-	auto ssr_ptr = cv::makePtr<SSR_Fixed>(16, 16, gauss_ptr);
+    auto gauss_ptr = createGaussianBlur_Fixed(50, 16);
+    auto ssr_ptr = createSSR_Fixed(16, 16, gauss_ptr);
 
     for (int i = 0; i < images.size(); ++i)
     {

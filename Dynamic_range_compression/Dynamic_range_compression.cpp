@@ -880,9 +880,9 @@ int main()
     //Test_all_methods();
     //Test_single_method();
 
-    //benchmark_main();
+    benchmark_main();
 
-    test_precision_batch_14to8();
+    //test_precision_batch_14to8();
 
     return 0;
 }

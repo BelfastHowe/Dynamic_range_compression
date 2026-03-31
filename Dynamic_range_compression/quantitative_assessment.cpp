@@ -1,4 +1,5 @@
 ﻿#include "quantitative_assessment.h"
+#include "Quantization.h"
 
 
 namespace fs = std::filesystem;
@@ -26,18 +27,24 @@ int benchmark_main()
             continue;
         cv::Mat img = cv::imread(entry.path().string(), cv::IMREAD_UNCHANGED);
         if (!img.empty() && img.type() == CV_16UC1)
+        {
+            cv::subtract(16383, img, img);
             images.push_back(img);
+        }
     }
     std::cout << "加载图像数量：" << images.size() << std::endl;
+
+    auto gauss_ptr = createGaussianBlur_Fixed(50, 16);
+    auto ssr_ptr = createSSR_Fixed(16, 16, gauss_ptr);
 
     // 注册各算法
     std::map<std::string, std::function<int(cv::InputArray, cv::OutputArray)>> algorithms;
 
-    algorithms["Linear"] = [](cv::InputArray input, cv::OutputArray output)->int {
+    algorithms["Linear_Float"] = [](cv::InputArray input, cv::OutputArray output)->int {
         return linear_mapping(input, output);
         };
 
-    algorithms["CLAHE"] = [](cv::InputArray input, cv::OutputArray output)->int {
+    algorithms["CLAHE_Float"] = [](cv::InputArray input, cv::OutputArray output)->int {
         return clahe_mapping(input, output, 3.0, cv::Size(8, 8));
         };
 
@@ -51,6 +58,22 @@ int benchmark_main()
 
     algorithms["DDE"] = [](cv::InputArray input, cv::OutputArray output)->int {
         return dde_enhance(input, output);
+        };
+
+    algorithms["Linear_Fixed"] = [](cv::InputArray input, cv::OutputArray output)->int {
+        return linear_mapping_fixed(input, output);
+        };
+
+    algorithms["CLAHE_Fixed"] = [](cv::InputArray input, cv::OutputArray output)->int {
+        return clahe_fixed_mapping(input, output, 3, cv::Size(8, 8));
+        };
+
+    algorithms["SSR_Float"] = [](cv::InputArray input, cv::OutputArray output)->int {
+        return single_scale_retinex(input, output, 50);
+        };
+
+    algorithms["SSR_Fixed"] = [&ssr_ptr](cv::InputArray input, cv::OutputArray output)->int {
+        return ssr_ptr->apply(input, output);
         };
 
     // 执行 benchmark 并打印结果
