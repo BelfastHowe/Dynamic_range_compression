@@ -1182,14 +1182,14 @@ PrecisionReport test_precision_14to8(
 
     // 浮点参考版本
     cv::Mat ref_out;
-    //clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
-    single_scale_retinex(img14bit, ref_out, 50);
+    clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
+    //single_scale_retinex(img14bit, ref_out, 50);
 
     // 定点量化版本
     cv::Mat fixed_out;
-    //clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
+    clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
     //cv::Ptr<SSR_Fixed> ssr = cv::makePtr<SSR_Fixed>(16, 24, 16, 50);
-	ssr->apply(img14bit, fixed_out);
+	//ssr->apply(img14bit, fixed_out);
 
     //8bit
     CV_Assert(ref_out.size() == fixed_out.size());
@@ -1244,6 +1244,8 @@ PrecisionReport test_precision_14to8(
 
     cv::Mat residual_norm;
     cv::normalize(residual_map, residual_norm, 0, 255, cv::NORM_MINMAX);
+    imwrite_mdy_private(fixed_out, "fixed_out");
+    imwrite_mdy_private(ref_out, "ref_out");
     imwrite_mdy_private(residual_norm, "residual_map.png");
 
     return rpt;
@@ -1251,7 +1253,7 @@ PrecisionReport test_precision_14to8(
 
 int test_precision_batch_14to8()
 {
-    int clipLimit = 128;
+    int clipLimit = 3;
     cv::Size tileSize = cv::Size(8, 8);
 
     fs::path inputDir(IMAGE_DIR);
