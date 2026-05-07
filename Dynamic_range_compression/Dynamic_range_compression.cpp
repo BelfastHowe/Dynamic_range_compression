@@ -441,10 +441,10 @@ int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
 
     //img14bit /= 16;
-    cv::normalize(img14bit, img14bit, 0, 1023, cv::NORM_MINMAX);
+    //cv::normalize(img14bit, img14bit, 0, 1023, cv::NORM_MINMAX);
 
     cv::Mat CLAHE;
-    cv::Ptr<CLAHE_Float> clahe = createCLAHE_Float(clipLimit, tileSize, 1024);
+    cv::Ptr<CLAHE_Float> clahe = createCLAHE_Float(clipLimit, tileSize, 16384);
     clahe->apply(img14bit, CLAHE);
 
     cv::Mat dst;
@@ -460,10 +460,10 @@ int clahe_fixed_mapping(cv::InputArray input, cv::OutputArray output, int clipLi
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
 
     //img14bit /= 16;
-    cv::normalize(img14bit, img14bit, 0, 1023, cv::NORM_MINMAX);
+    //cv::normalize(img14bit, img14bit, 0, 1023, cv::NORM_MINMAX);
 
     cv::Mat CLAHE;
-    cv::Ptr<CLAHE_Fixed> clahe = createCLAHE_Fixed(clipLimit, tileSize, 1024);
+    cv::Ptr<CLAHE_Fixed> clahe = createCLAHE_Fixed(clipLimit, tileSize, 16384);
     clahe->apply(img14bit, CLAHE);
 
     auto global_min = clahe->getGlobalMin();
