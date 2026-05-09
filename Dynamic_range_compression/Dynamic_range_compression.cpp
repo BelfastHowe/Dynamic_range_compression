@@ -159,6 +159,8 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
     cv::Mat src = input.getMat().clone();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
+    auto ksize = 61;
+
     // 归一化到0-1
     cv::Mat src_normal;
     cv::normalize(src, src_normal, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
@@ -174,7 +176,7 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
     {
         // 估计光照分量（高斯模糊）
         cv::Mat gauss;
-        cv::GaussianBlur(src_normal, gauss, cv::Size(0, 0), sigma);
+        cv::GaussianBlur(src_normal, gauss, cv::Size(ksize, ksize), sigma);
 
         cv::Mat log_blur;
         cv::log(gauss, log_blur);
@@ -195,8 +197,8 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
     cv::pow(result, 2, gamma);
     cv::normalize(gamma, result, 0, 255, cv::NORM_MINMAX, CV_8U);*/
 
-    cv::normalize(log_reflectance, result, 0, 65535, cv::NORM_MINMAX, CV_16U);
-    percentile_mapping(result, result, 0.25, 99.75);
+    cv::normalize(log_reflectance, result, 0, 255, cv::NORM_MINMAX, CV_8U);
+    //percentile_mapping(result, result, 0.25, 99.75);
 
     output.assign(result);
     return 0;
@@ -649,8 +651,9 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
     struct DDEConfig
     {
         // 基础层分离（双边滤波）
-        int    spatialSigma = 9;      // 空间域 sigma（像素，奇数）
-        double rangeSigma = 0.1;    // 值域 sigma（归一化后）
+        int    d = 9;               // 邻域直径（像素，奇数）
+        double sigmaColor = 0.2;    // 值域 sigma
+		double sigmaSpace = 3.0;    // 空间域 sigma
 
         // 细节增强
         double detailGain = 3.0;    // 细节增益系数
@@ -668,25 +671,50 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
     DDEConfig cfg;
     //cfg.detailGain = 2.0;   // 热源周围细节不过增强
     cfg.baseGamma = 1.0;   // 更强的动态范围压缩
-    //cfg.rangeSigma = 0.05;  // 更严格的边缘保护
+    //cfg.sigmaColor = 0.05;  // 更严格的边缘保护
+    //cfg.sigmaColor = 146.1;
+    //cfg.sigmaSpace = 15.0;
     //cfg.detailClip = 0.15;
 
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-    // Step 1: 归一化到 [0, 1]
+    // Step 1:
     cv::Mat img_norm;
-    cv::normalize(src, img_norm, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
+    double minVal, maxVal;
+
+    if (0)
+    {
+        cfg.sigmaSpace = cv::saturate_cast<double>(cfg.d) / 3.0;
+        cv::normalize(src, img_norm, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
+        cv::minMaxLoc(img_norm, &minVal, &maxVal);
+    }
+    else
+    {
+        cfg.sigmaSpace = cv::saturate_cast<double>(cfg.d) / 3.0;
+        src.convertTo(img_norm, CV_32F);
+        cv::minMaxLoc(img_norm, &minVal, &maxVal);
+		//auto dynamicRange = maxVal - minVal;
+        double dynamicRange = 1461;
+        cfg.sigmaColor = dynamicRange * cfg.sigmaColor;
+		cfg.detailClip = dynamicRange * cfg.detailClip;
+    }
+
+    std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
 
     // Step 2: 双边滤波分离基础层（低频光照）和细节层（高频细节）
-    //         rangeSigma 在归一化域下有意义，无需随深度调整
+    //         sigmaColor 在归一化域下有意义，无需随深度调整
     cv::Mat baseLayer;
     cv::bilateralFilter(img_norm, baseLayer,
-        cfg.spatialSigma,
-        cfg.rangeSigma,
-        cfg.rangeSigma);
+        cfg.d,
+        cfg.sigmaColor,
+        cfg.sigmaSpace);
 
     cv::Mat detailLayer = img_norm - baseLayer;
+
+    cv::Mat detail_observe;
+    cv::normalize(detailLayer, detail_observe, 0, 255, cv::NORM_MINMAX, CV_8U);
+	//imwrite_mdy_private(detail_observe, "DDE_Detail");
 
     // Step 3: 基础层 Gamma 压缩，抑制大范围光照不均
     cv::Mat baseCompressed;
@@ -699,17 +727,18 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
 
     // 细节层截断，防止过增强产生光晕
     cv::Mat detailClipped;
-    cv::threshold(detailEnhanced, detailClipped, cfg.detailClip, cfg.detailClip, cv::THRESH_TRUNC);
-    cv::threshold(-detailClipped, detailClipped, cfg.detailClip, cfg.detailClip, cv::THRESH_TRUNC);
-    detailClipped = -detailClipped;  // 还原符号
+
+    cv::min(detailEnhanced, cfg.detailClip, detailClipped);
+    cv::max(detailClipped, -cfg.detailClip, detailClipped);
+
 
     // Step 5: 重建
     cv::Mat reconstructed = baseCompressed + detailClipped;
 
     // Step 6: 百分位截断 + 线性拉伸到 [0, 255]
     cv::Mat dst;
-    cv::normalize(reconstructed, dst, 0, 65535, cv::NORM_MINMAX, CV_16U);
-    percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
+    cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
+    //percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
 
     output.assign(dst);
 
@@ -719,7 +748,7 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
 int Test_single_method()
 {
     fs::path inputDir(IMAGE_DIR);
-
+    
     if (!fs::exists(inputDir))
     {
         std::cerr << "Input directory not found: " << IMAGE_DIR << std::endl;
@@ -730,6 +759,7 @@ int Test_single_method()
     double ag = 0.0;
     double ssim = 0.0;
     int imageCount = 0;
+    double range_sum = 0.0;
 
     for (const auto& entry : fs::directory_iterator(inputDir))
     {
@@ -753,14 +783,14 @@ int Test_single_method()
         imwrite_mdy_private(dst_linear, "Linear");*/
 
 
-        cv::Mat dst_CLAHE;
+        /*cv::Mat dst_CLAHE;
         clahe_mapping(src, dst_CLAHE, 3.0, cv::Size(8, 8));
-        imwrite_mdy_private(dst_CLAHE, "CLAHE");
+        imwrite_mdy_private(dst_CLAHE, "CLAHE");*/
 
 
-        cv::Mat dst_CLAHE_Fixed;
+        /*cv::Mat dst_CLAHE_Fixed;
         clahe_fixed_mapping(src, dst_CLAHE_Fixed, 3, cv::Size(8, 8));
-        imwrite_mdy_private(dst_CLAHE_Fixed, "CLAHE_Fixed");
+        imwrite_mdy_private(dst_CLAHE_Fixed, "CLAHE_Fixed");*/
 
 
         /*cv::Mat dst_GLAF;
@@ -768,9 +798,9 @@ int Test_single_method()
         imwrite_mdy_private(dst_GLAF, "GLAF");*/
 
 
-        /*cv::Mat dst_MSR;
+        cv::Mat dst_MSR;
         multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
-        imwrite_mdy_private(dst_MSR, "MSR");*/
+        imwrite_mdy_private(dst_MSR, "MSR");
 
 
         /*cv::Mat dst_DDE;
@@ -786,7 +816,13 @@ int Test_single_method()
         /*entropy += calcEntropy(dst_DDE);
         ag += calcAverageGradient(dst_DDE);
         ssim += calcSSIM(dst_DDE, dst_linear);*/
+        double minVal, maxVal;
+        cv::minMaxLoc(src, &minVal, &maxVal);
+		auto range = maxVal - minVal;
+        range_sum += range;
         imageCount++;
+
+        std::cout << "Range: " << range << std::endl;
 
         cv::waitKey(1);
     }
@@ -796,6 +832,7 @@ int Test_single_method()
         std::cout << "Average Entropy: " << entropy / imageCount << std::endl;
         std::cout << "Average Gradient: " << ag / imageCount << std::endl;
         std::cout << "Average SSIM: " << ssim / imageCount << std::endl;
+		std::cout << "Average Range: " << range_sum / imageCount << std::endl;
     }
 
     return 0;
@@ -884,11 +921,11 @@ int Test_all_methods()
 int main()
 {
     //Test_all_methods();
-    //Test_single_method();
+    Test_single_method();
 
     //benchmark_main();
 
-    test_precision_batch_14to8();
+    //test_precision_batch_14to8();
 
     return 0;
 }
