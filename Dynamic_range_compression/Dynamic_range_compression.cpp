@@ -4,6 +4,7 @@
 #include "Dynamic_range_compression.h"
 #include "quantitative_assessment.h"
 #include "Quantization.h"
+#include "DDE_improvement.h"
 
 namespace fs = std::filesystem;
 using Ms = std::chrono::duration<double, std::milli>;
@@ -207,7 +208,7 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
 int rgb2png()
 {
     //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_15-46-24";
-    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_16-04-05";
+    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-05-11_18-49-38";
     std::string outputDir = "C:/Users/Belfast/Desktop/result";
 
     if (!fs::exists(outputDir)) {
@@ -651,7 +652,7 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
     struct DDEConfig
     {
         // 基础层分离（双边滤波）
-        int    d = 9;               // 邻域直径（像素，奇数）
+        int    d = 3;               // 邻域直径（像素，奇数）
         double sigmaColor = 0.2;    // 值域 sigma
 		double sigmaSpace = 3.0;    // 空间域 sigma
 
@@ -683,9 +684,9 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
     cv::Mat img_norm;
     double minVal, maxVal;
 
-    if (0)
+    if (1)
     {
-        cfg.sigmaSpace = cv::saturate_cast<double>(cfg.d) / 3.0;
+        //cfg.sigmaSpace = cv::saturate_cast<double>(cfg.d) / 3.0;
         cv::normalize(src, img_norm, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
         cv::minMaxLoc(img_norm, &minVal, &maxVal);
     }
@@ -751,7 +752,7 @@ int Test_single_method()
     
     if (!fs::exists(inputDir))
     {
-        std::cerr << "Input directory not found: " << IMAGE_DIR << std::endl;
+        std::cerr << "Input directory not found: " << NOISE_IMAGE_DIR << std::endl;
         return -1;
     }
 
@@ -798,14 +799,14 @@ int Test_single_method()
         imwrite_mdy_private(dst_GLAF, "GLAF");*/
 
 
-        cv::Mat dst_MSR;
+        /*cv::Mat dst_MSR;
         multi_scale_retinex(src, dst_MSR, { 15.0, 80.0, 250.0 });
-        imwrite_mdy_private(dst_MSR, "MSR");
+        imwrite_mdy_private(dst_MSR, "MSR");*/
 
 
-        /*cv::Mat dst_DDE;
+        cv::Mat dst_DDE;
         dde_enhance(src, dst_DDE);
-        imwrite_mdy_private(dst_DDE, "DDE");*/
+        imwrite_mdy_private(dst_DDE, "DDE");
 
 
        /* cv::Mat dst_SSR;
@@ -813,9 +814,9 @@ int Test_single_method()
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
 
-        /*entropy += calcEntropy(dst_DDE);
+        entropy += calcEntropy(dst_DDE);
         ag += calcAverageGradient(dst_DDE);
-        ssim += calcSSIM(dst_DDE, dst_linear);*/
+        /*ssim += calcSSIM(dst_DDE, dst_linear);*/
         double minVal, maxVal;
         cv::minMaxLoc(src, &minVal, &maxVal);
 		auto range = maxVal - minVal;
@@ -921,11 +922,14 @@ int Test_all_methods()
 int main()
 {
     //Test_all_methods();
-    Test_single_method();
+    //Test_single_method();
 
     //benchmark_main();
 
     //test_precision_batch_14to8();
+    //rgb2png();
+
+    DDE_improvement();
 
     return 0;
 }
