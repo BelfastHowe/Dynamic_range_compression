@@ -748,7 +748,8 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
 
 int Test_single_method()
 {
-    fs::path inputDir(IMAGE_DIR);
+    //fs::path inputDir(IMAGE_DIR);
+    fs::path inputDir(NOISE_IMAGE_DIR);
     
     if (!fs::exists(inputDir))
     {
@@ -779,9 +780,9 @@ int Test_single_method()
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
         cv::subtract(16383, src, src); 
 
-        /*cv::Mat dst_linear;
+        cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
-        imwrite_mdy_private(dst_linear, "Linear");*/
+        imwrite_mdy_private(dst_linear, "Linear");
 
 
         /*cv::Mat dst_CLAHE;
@@ -804,9 +805,9 @@ int Test_single_method()
         imwrite_mdy_private(dst_MSR, "MSR");*/
 
 
-        cv::Mat dst_DDE;
+        /*cv::Mat dst_DDE;
         dde_enhance(src, dst_DDE);
-        imwrite_mdy_private(dst_DDE, "DDE");
+        imwrite_mdy_private(dst_DDE, "DDE");*/
 
 
        /* cv::Mat dst_SSR;
@@ -814,8 +815,8 @@ int Test_single_method()
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
 
-        entropy += calcEntropy(dst_DDE);
-        ag += calcAverageGradient(dst_DDE);
+        entropy += calcEntropy(dst_linear);
+        ag += calcAverageGradient(dst_linear);
         /*ssim += calcSSIM(dst_DDE, dst_linear);*/
         double minVal, maxVal;
         cv::minMaxLoc(src, &minVal, &maxVal);
