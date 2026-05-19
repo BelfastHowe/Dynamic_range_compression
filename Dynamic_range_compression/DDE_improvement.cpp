@@ -3,25 +3,35 @@
 
 namespace fs = std::filesystem;
 
-int DDE_origin_adaptive_gain(cv::InputArray input, cv::OutputArray output, double baseGain, double sigma = 5.0)
+int local_variance_32F(cv::InputArray input, cv::OutputArray output, double sigma = 5.0)
 {
-    cv::Mat detailLayer = input.getMat();
-    CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
+	cv::Mat src = input.getMat();
+	CV_CheckTypeEQ(src.type(), CV_32FC1, "");
 
-    // 局部方差估计
     cv::Mat mu, mu2, variance;
-	cv::Mat detailLayerSquared = detailLayer.mul(detailLayer);
-    cv::GaussianBlur(detailLayer, mu, cv::Size(0, 0), sigma);
-    cv::GaussianBlur(detailLayerSquared, mu2, cv::Size(0, 0), sigma);
-	cv::Mat muSquared = mu.mul(mu);
-	variance = mu2 - muSquared;
+    cv::GaussianBlur(src, mu, cv::Size(0, 0), sigma);
+    cv::GaussianBlur(src.mul(src), mu2, cv::Size(0, 0), sigma);
+    variance = mu2 - mu.mul(mu);
     cv::max(variance, 0.0f, variance);
 
-    // 方差归一化到 [0, 1]
+	output.assign(variance);
+	return 0;
+}
+
+int DDE_canny_adaptive_gain(cv::InputArray input, cv::OutputArray output, double baseGain, double sigma = 5.0)
+{
+    cv::Mat detailLayer = input.getMat();
+    CV_CheckTypeEQ(detailLayer.type(), CV_32FC1, "");
+
+    
+
+    cv::Mat variance;
+	local_variance_32F(detailLayer, variance, sigma);
+
     cv::Mat varianceNorm;
     cv::normalize(variance, varianceNorm, 0.0, 1.0, cv::NORM_MINMAX);
 
-    // gain = baseGain / (1 + k * variance)，方差大时自动降低增益
+    // gain = baseGain / (1 + k * variance)
     double k = baseGain - 1.0;
     cv::Mat gainMap = baseGain / (1.0 + k * varianceNorm);
 
@@ -30,7 +40,7 @@ int DDE_origin_adaptive_gain(cv::InputArray input, cv::OutputArray output, doubl
 }
 
 
-int dde_origin(cv::InputArray input, cv::OutputArray output)
+int dde_canny(cv::InputArray input, cv::OutputArray output)
 {
     struct DDEConfig
     {
@@ -96,17 +106,9 @@ int dde_origin(cv::InputArray input, cv::OutputArray output)
     cv::pow(baseLayer, cfg.baseGamma, baseCompressed);
 
     cv::Mat gainMap;
-    DDE_origin_adaptive_gain(detailLayer, gainMap, cfg.detailGain);
+    DDE_canny_adaptive_gain(detailLayer, gainMap, cfg.detailGain);
 
-    cv::Mat canny;
-
-    cv::Mat detailLayer_8U;
-	cv::normalize(detailLayer, detailLayer_8U, 0, 255, cv::NORM_MINMAX, CV_8U);
-    cv::Canny(detailLayer_8U, detailLayer_8U, 100, 200);
-	detailLayer_8U.convertTo(canny, CV_32F, 1.0 / 2550.0);
-
-
-    cv::Mat detailEnhanced = gainMap.mul(canny);
+    cv::Mat detailEnhanced = gainMap.mul(detailLayer);
 
     cv::Mat detailClipped;
 
@@ -214,15 +216,13 @@ double estimateNoiseWaveletMAD(cv::InputArray input)
     cv::Mat gray = input.getMat();
 	CV_CheckTypeEQ(gray.type(), CV_32FC1, "Input must be a single-channel 32F image.");
 
-    // 确保图像尺寸为偶数，方便 2x2 拆分
     int hh_rows = gray.rows / 2;
     int hh_cols = gray.cols / 2;
 
     std::vector<float> hh_coefficients;
     hh_coefficients.reserve(hh_rows * hh_cols);
 
-    // 1. 手动计算 1 层 Haar 小波的 HH1 分量（对角线高频系数）
-    // Haar 小波基的 HH 滤波器系数矩阵为: [ 1, -1; -1,  1 ] / 2
+    // Haar 小波的 HH 滤波器系数矩阵为: [ 1, -1; -1,  1 ] / 2
     for (int i = 0; i < hh_rows; ++i)
     {
         const float* row0 = gray.ptr<float>(2 * i);
@@ -235,41 +235,33 @@ double estimateNoiseWaveletMAD(cv::InputArray input)
             float p10 = row1[2 * j];
             float p11 = row1[2 * j + 1];
 
-            // 计算 HH1 系数: (p00 - p01 - p10 + p11) * 0.5
             float hh = (p00 - p01 - p10 + p11) * 0.5f;
 
-            // 取绝对值存入数组
             hh_coefficients.push_back(std::abs(hh));
         }
     }
 
     if (hh_coefficients.empty()) return 0.0;
 
-    // 2. 寻找绝对值的中位数 (Median)
     size_t mid_index = hh_coefficients.size() / 2;
     std::nth_element(hh_coefficients.begin(), hh_coefficients.begin() + mid_index, hh_coefficients.end());
     float median_abs = hh_coefficients[mid_index];
 
-    // 3. 根据 MAD 公式计算噪声标准差 sigma
     double sigma = median_abs / 0.6745;
 
-    return sigma * sigma;
+    return sigma;
 }
 
-int DDE_noise_adaptive_gain(cv::InputArray input, cv::OutputArray output, double baseGain, double noise_Variance, double sigma = 5.0)
+int DDE_noise_adaptive_gain(cv::InputArray input, cv::OutputArray output, double baseGain, double noise_Wavelet, double sigma = 5.0)
 {
     cv::Mat detailLayer = input.getMat();
     CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
 
-    // 局部方差估计
-    cv::Mat mu, mu2, variance;
-    cv::Mat detailLayerSquared = detailLayer.mul(detailLayer);
-    cv::GaussianBlur(detailLayer, mu, cv::Size(0, 0), sigma);
-    cv::GaussianBlur(detailLayerSquared, mu2, cv::Size(0, 0), sigma);
-    cv::Mat muSquared = mu.mul(mu);
-    variance = mu2 - muSquared;
-    cv::max(variance, 0.0f, variance);
+    cv::Mat variance;
+	local_variance_32F(detailLayer, variance, sigma);
 
+	//double noise_detail = estimateNoiseWaveletMAD(detailLayer);
+    double noise_Variance = noise_Wavelet * noise_Wavelet;
     double edgeSaturationThresh = 50.0 * noise_Variance;
     if (edgeSaturationThresh < 1e-6) edgeSaturationThresh = 1e-6; // 防止除零
 
@@ -279,7 +271,7 @@ int DDE_noise_adaptive_gain(cv::InputArray input, cv::OutputArray output, double
     double k = baseGain - 1.0;
     cv::Mat gainMap = baseGain / (1.0 + k * varianceNorm);
 
-    double alpha = 2.0; // 噪声控制敏感系数，通常取 2.0 - 5.0
+    double alpha = 3.0; // 噪声控制敏感系数，通常取 2.0 - 5.0
     cv::Mat noiseSuppression;
     cv::add(variance, cv::Scalar(alpha * noise_Variance + 1e-6), noiseSuppression);
     cv::divide(variance, noiseSuppression, noiseSuppression);
@@ -346,7 +338,7 @@ int dde_denoise(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc
 
     std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
 
-	auto noise_Variance = estimateNoiseWaveletMAD(img_norm);
+	auto noise_Wavelet = estimateNoiseWaveletMAD(img_norm);
 
     cv::Mat baseLayer;
     cv::bilateralFilter(img_norm, baseLayer,
@@ -364,7 +356,7 @@ int dde_denoise(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc
     cv::pow(baseLayer, cfg.baseGamma, baseCompressed);
 
     cv::Mat gainMap;
-    DDE_noise_adaptive_gain(detailLayer, gainMap, cfg.detailGain, noise_Variance);
+    DDE_noise_adaptive_gain(detailLayer, gainMap, cfg.detailGain, noise_Wavelet);
     cv::Mat detailEnhanced = gainMap.mul(detailLayer);
 
     cv::Mat detailClipped;
@@ -423,8 +415,8 @@ int test_DDE_improve()
     for (int i = 0; i < images.size(); ++i)
     {
         cv::Mat dst_DDE;
-        //dde_denoise(images[i], dst_DDE, nuc);
-		dde_origin(images[i], dst_DDE);
+        dde_denoise(images[i], dst_DDE, nuc);
+		//dde_canny(images[i], dst_DDE);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
     }
 
