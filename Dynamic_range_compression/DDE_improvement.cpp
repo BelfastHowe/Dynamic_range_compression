@@ -18,12 +18,78 @@ int local_variance_32F(cv::InputArray input, cv::OutputArray output, double sigm
 	return 0;
 }
 
+int residual_auto_canny(cv::InputArray input, cv::OutputArray output, double sigma = 2.0)
+{
+	cv::Mat src = input.getMat();
+	CV_CheckTypeEQ(src.type(), CV_32FC1, "");
+	
+    cv::Mat posPart, negPart;
+    cv::max(src, 0.0f, posPart);
+    cv::max(-src, 0.0f, negPart);
+
+    double posminVal, posmaxVal, negminVal, negmaxVal;
+    cv::minMaxLoc(posPart, &posminVal, &posmaxVal);
+    cv::minMaxLoc(negPart, &negminVal, &negmaxVal);
+
+    double scale;
+    if (posmaxVal >= negmaxVal)
+        scale = (posmaxVal > 1e-6) ? (255.0 / posmaxVal) : 1.0;
+    else
+		scale = (negmaxVal > 1e-6) ? (255.0 / negmaxVal) : 1.0;
+
+    cv::Mat pos8U, neg8U;
+    posPart.convertTo(pos8U, CV_8U, scale);
+    negPart.convertTo(neg8U, CV_8U, scale);
+
+    cv::Mat mean_benchmark;
+    if (posmaxVal >= negmaxVal)
+        mean_benchmark = pos8U.clone();
+    else
+        mean_benchmark = neg8U.clone();
+
+	//auto mean = cv::mean(mean_benchmark)[0];
+    int sum = 0;
+    int n = 0;
+	for (int i = 0; i < mean_benchmark.rows; i++)
+	{
+		const uchar* rowPtr = mean_benchmark.ptr<uchar>(i);
+		for (int j = 0; j < mean_benchmark.cols; j++)
+		{
+			auto val = rowPtr[j];
+            if (val == 0) continue;
+            sum += val;
+			n++;
+		}
+	}
+	double mean = (n > 0) ? (static_cast<double>(sum) / n) : 0.0;
+
+    int lower = static_cast<int>(std::max(0.0, 3.0 * mean));
+    int upper = static_cast<int>(std::min(255.0, (1.0 + sigma) * 3.0 * mean));
+
+	cv::Mat dst, posCanny, negCanny;
+    cv::Canny(pos8U, posCanny, lower, upper);
+    cv::Canny(neg8U, negCanny, lower, upper);
+	cv::add(posCanny, negCanny, dst);
+
+	output.assign(dst);
+	return 0;
+}
+
 int DDE_canny_adaptive_gain(cv::InputArray input, cv::OutputArray output, double baseGain, double sigma = 5.0)
 {
     cv::Mat detailLayer = input.getMat();
     CV_CheckTypeEQ(detailLayer.type(), CV_32FC1, "");
 
-    
+    cv::Mat canny;
+    residual_auto_canny(detailLayer, canny);
+    //imwrite_mdy_private(canny, "DDE_Canny");
+
+    //auto element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+	//cv::morphologyEx(canny, canny, cv::MORPH_DILATE, element);
+
+    cv::Mat canny_weight;
+    cv::GaussianBlur(canny, canny_weight, cv::Size(0, 0), 3);
+    cv::normalize(canny_weight, canny_weight, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
 
     cv::Mat variance;
 	local_variance_32F(detailLayer, variance, sigma);
@@ -35,7 +101,11 @@ int DDE_canny_adaptive_gain(cv::InputArray input, cv::OutputArray output, double
     double k = baseGain - 1.0;
     cv::Mat gainMap = baseGain / (1.0 + k * varianceNorm);
 
-    output.assign(gainMap);
+    cv::Mat final_gainMap;
+	//gainMap.copyTo(final_gainMap, canny);
+	final_gainMap = gainMap.mul(canny_weight);
+
+    output.assign(final_gainMap);
     return 0;
 }
 
@@ -47,7 +117,7 @@ int dde_canny(cv::InputArray input, cv::OutputArray output)
         // 基础层分离（双边滤波）
         int    d = 9;               // 邻域直径（像素，奇数）
         double sigmaColor = 0.2;    // 值域 sigma
-        double sigmaSpace = 3.0;    // 空间域 sigma
+        double sigmaSpace = 9.0;    // 空间域 sigma
 
         // 细节增强
         double detailGain = 3.0;    // 细节增益系数
@@ -63,6 +133,8 @@ int dde_canny(cv::InputArray input, cv::OutputArray output)
 
     DDEConfig cfg;
     cfg.baseGamma = 1.0;   // 更强的动态范围压缩
+    cfg.d = 15;
+    cfg.sigmaSpace = 15.0;
 
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
@@ -271,7 +343,7 @@ int DDE_noise_adaptive_gain(cv::InputArray input, cv::OutputArray output, double
     double k = baseGain - 1.0;
     cv::Mat gainMap = baseGain / (1.0 + k * varianceNorm);
 
-    double alpha = 3.0; // 噪声控制敏感系数，通常取 2.0 - 5.0
+    double alpha = 5.0; // 噪声控制敏感系数，通常取 2.0 - 5.0
     cv::Mat noiseSuppression;
     cv::add(variance, cv::Scalar(alpha * noise_Variance + 1e-6), noiseSuppression);
     cv::divide(variance, noiseSuppression, noiseSuppression);
@@ -301,6 +373,8 @@ int dde_denoise(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc
 
     DDEConfig cfg;
     cfg.baseGamma = 1.0;
+    cfg.d = 15;
+    cfg.sigmaSpace = 15.0;
 
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
@@ -340,11 +414,16 @@ int dde_denoise(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc
 
 	auto noise_Wavelet = estimateNoiseWaveletMAD(img_norm);
 
-    cv::Mat baseLayer;
+    cv::Mat cache, baseLayer;
     cv::bilateralFilter(img_norm, baseLayer,
         cfg.d,
         cfg.sigmaColor,
         cfg.sigmaSpace);
+
+    /*cv::bilateralFilter(cache, baseLayer,
+        cfg.d,
+        cfg.sigmaColor,
+        cfg.sigmaSpace);*/
 
     cv::Mat detailLayer = img_norm - baseLayer;
 
@@ -415,8 +494,8 @@ int test_DDE_improve()
     for (int i = 0; i < images.size(); ++i)
     {
         cv::Mat dst_DDE;
-        dde_denoise(images[i], dst_DDE, nuc);
-		//dde_canny(images[i], dst_DDE);
+        //dde_denoise(images[i], dst_DDE, nuc);
+		dde_canny(images[i], dst_DDE);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
     }
 
