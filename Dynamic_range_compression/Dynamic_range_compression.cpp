@@ -49,6 +49,16 @@ int imwrite_mdy_private(cv::InputArray input, const std::string file_name)
     return 0;
 }
 
+int imwrite_mdy_private_normalization_8u(cv::InputArray input, const std::string file_name)
+{
+    cv::Mat src = input.getMat();
+
+    cv::Mat normalized;
+    cv::normalize(src, normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
+
+    return imwrite_mdy_private(normalized, file_name);
+}
+
 int processRawFile(const std::string& inputPath, const std::string& outputPath)
 {
     // 图像参数

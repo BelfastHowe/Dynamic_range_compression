@@ -18,6 +18,20 @@ int local_variance_32F(cv::InputArray input, cv::OutputArray output, double sigm
     return 0;
 }
 
+int calc_Gradient_32F(cv::InputArray src, cv::OutputArray output)
+{
+    cv::Mat img = src.getMat();
+    CV_CheckTypeEQ(img.type(), CV_32FC1, "");
+
+    cv::Mat gradX, gradY, gradMag;
+    cv::Scharr(img, gradX, CV_32F, 1, 0);
+    cv::Scharr(img, gradY, CV_32F, 0, 1);
+    cv::magnitude(gradX, gradY, gradMag);
+
+    output.assign(gradMag);
+    return 0;
+}
+
 int residual_auto_canny(cv::InputArray input, cv::OutputArray output, double sigma = 2.0)
 {
     cv::Mat src = input.getMat();
@@ -81,17 +95,17 @@ int auto_canny_32F(cv::InputArray input, cv::OutputArray output, double sigma = 
     CV_CheckTypeEQ(src.type(), CV_32FC1, "");
 
     cv::Mat src_gauss;
-	//cv::GaussianBlur(src, src_gauss, cv::Size(0, 0), 5);
+    //cv::GaussianBlur(src, src_gauss, cv::Size(0, 0), 5);
 
     cv::Mat src_norm;
-	cv::normalize(src, src_norm, 0.0, 255.0, cv::NORM_MINMAX, CV_8U);
+    cv::normalize(src, src_norm, 0.0, 255.0, cv::NORM_MINMAX, CV_8U);
 
-	cv::Mat mask = (src_norm != 0);
+    cv::Mat mask = (src_norm != 0);
     double mean = 0.0;
-	auto nonZeroCount = cv::countNonZero(mask);
+    auto nonZeroCount = cv::countNonZero(mask);
     if (nonZeroCount == 0)
     {
-		mean = 0.0;
+        mean = 0.0;
     }
     mean = cv::mean(src_norm)[0];
 
@@ -106,14 +120,72 @@ int auto_canny_32F(cv::InputArray input, cv::OutputArray output, double sigma = 
         vec.end());
 
     double med = vec[vec.size() / 2];
-	std::cout << "auto_canny_16F Median: " << med << ", auto_canny_16F Mean: " << mean << std::endl;
+    std::cout << "auto_canny_16F Median: " << med << ", auto_canny_16F Mean: " << mean << std::endl;
 
     int lower = static_cast<int>(std::max(0.0, (1-sigma) * med));
     int upper = static_cast<int>(std::min(255.0, (1.0 + sigma) * med));
     cv::Mat dst;
-	cv::Canny(src_norm, dst, lower, upper);
+    cv::Canny(src_norm, dst, lower, upper);
 
     output.assign(dst);
+    return 0;
+}
+
+// 梯度低分位数估计噪声水平
+static double estimateNoiseFromGradient(cv::InputArray input, double percentile = 0.50)
+{
+	cv::Mat gradMag = input.getMat();
+	CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
+
+    std::vector<float> vals;
+    gradMag.reshape(1, 1).copyTo(vals);
+
+    size_t idx = static_cast<size_t>(percentile * vals.size());
+    idx = std::min(idx, vals.size() - 1);
+    std::nth_element(vals.begin(), vals.begin() + idx, vals.end());
+
+    return static_cast<double>(vals[idx]) / 0.6745;
+}
+
+// 双端抑制权重图
+// lo_thresh: 噪声抑制下界（低于此全压制）
+// hi_thresh: 边缘饱和上界（高于此全压制）
+// steepness: sigmoid 斜率，越大过渡越硬
+static int dualSidedSuppressionWeight(
+    cv::InputArray input,
+    cv::OutputArray output,
+    double lo_thresh,
+    double hi_thresh,
+    double steepness = 6.0)
+{
+	cv::Mat gradMag = input.getMat();
+	CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
+	output.create(gradMag.size(), CV_32FC1);
+	cv::Mat weightMap = output.getMat();
+
+    // 归一化到 [lo, hi] 区间，使 sigmoid 参数与绝对幅度解耦
+    double inv_lo = 1.0 / (lo_thresh + 1e-9);
+    double inv_hi = 1.0 / (hi_thresh + 1e-9);
+
+    for (int i = 0; i < gradMag.rows; ++i)
+    {
+        const float* gp = gradMag.ptr<float>(i);
+        float* wp = weightMap.ptr<float>(i);
+
+        for (int j = 0; j < gradMag.cols; ++j)
+        {
+            double g = gp[j];
+
+            // 上升沿：g > lo_thresh 时权重升起
+            double rise = 1.0 / (1.0 + std::exp(-steepness * (g * inv_lo - 1.0)));
+
+            // 下降沿：g < hi_thresh 时权重保持，超过后下降
+            double fall = 1.0 / (1.0 + std::exp(steepness * (g * inv_hi - 1.0)));
+
+            wp[j] = static_cast<float>(rise * fall);
+        }
+    }
+
     return 0;
 }
 
@@ -121,20 +193,28 @@ int DDE_canny_adaptive_gain(cv::InputArray input, cv::OutputArray output, cv::In
 {
     cv::Mat detailLayer = input.getMat();
     CV_CheckTypeEQ(detailLayer.type(), CV_32FC1, "");
-	cv::Mat cannyInput = in_canny.getMat();
-	CV_CheckTypeEQ(cannyInput.type(), CV_8UC1, "");
+    cv::Mat cannyInput = in_canny.getMat();
+    CV_CheckTypeEQ(cannyInput.type(), CV_8UC1, "");
 
     cv::Mat detailLayer_residual_canny;
     residual_auto_canny(detailLayer, detailLayer_residual_canny);
     imwrite_mdy_private(detailLayer_residual_canny, "DDE_detailLayer_residual_canny");
 
-	cv::Mat detailLayer_norm_canny;
-	auto_canny_32F(detailLayer, detailLayer_norm_canny);
-	imwrite_mdy_private(detailLayer_norm_canny, "DDE_detailLayer_norm_canny");
+    cv::Mat detailLayer_norm_canny;
+    auto_canny_32F(detailLayer, detailLayer_norm_canny);
+    imwrite_mdy_private(detailLayer_norm_canny, "DDE_detailLayer_norm_canny");
 
-    cv::Mat detailLayer_canny_diff;
-	cv::absdiff(detailLayer_residual_canny, detailLayer_norm_canny, detailLayer_canny_diff);
-	imwrite_mdy_private(detailLayer_canny_diff, "DDE_detailLayer_canny_diff");
+    cv::Mat detailLayer_laplacian;
+    cv::Laplacian(detailLayer, detailLayer_laplacian, CV_32F, 3);
+    imwrite_mdy_private_normalization_8u(detailLayer_laplacian, "DDE_DetailLayer_Laplacian");
+
+	cv::Mat detailLayer_gradient;
+	calc_Gradient_32F(detailLayer, detailLayer_gradient);
+	imwrite_mdy_private_normalization_8u(detailLayer_gradient, "DDE_DetailLayer_Gradient");
+
+    /*cv::Mat detailLayer_canny_diff;
+    cv::absdiff(detailLayer_residual_canny, detailLayer_norm_canny, detailLayer_canny_diff);
+    imwrite_mdy_private(detailLayer_canny_diff, "DDE_detailLayer_canny_diff");*/
 
     //auto element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
     //cv::morphologyEx(canny, canny, cv::MORPH_DILATE, element);
@@ -215,7 +295,7 @@ int dde_canny(cv::InputArray input, cv::OutputArray output)
     std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
     cv::Mat src_canny;
     auto_canny_32F(img_norm, src_canny);
-	imwrite_mdy_private(src_canny, "DDE_src_Canny");
+    imwrite_mdy_private(src_canny, "DDE_src_Canny");
 
     cv::Mat baseLayer;
     cv::bilateralFilter(img_norm, baseLayer,
@@ -226,12 +306,11 @@ int dde_canny(cv::InputArray input, cv::OutputArray output)
     cv::Mat detailLayer = img_norm - baseLayer;
 
     cv::Mat baseLayer_canny;
-	auto_canny_32F(baseLayer, baseLayer_canny);
-	imwrite_mdy_private(baseLayer_canny, "DDE_BaseLayer_Canny");
+    auto_canny_32F(baseLayer, baseLayer_canny);
+    imwrite_mdy_private(baseLayer_canny, "DDE_BaseLayer_Canny");
 
-    cv::Mat detail_observe;
-    cv::normalize(detailLayer, detail_observe, 0, 255, cv::NORM_MINMAX, CV_8U);
-    //imwrite_mdy_private(detail_observe, "DDE_Detail");
+    imwrite_mdy_private_normalization_8u(baseLayer, "DDE_BaseLayer");
+    imwrite_mdy_private_normalization_8u(detailLayer, "DDE_DetailLayer");
 
     cv::Mat baseCompressed;
     cv::pow(baseLayer, cfg.baseGamma, baseCompressed);
@@ -245,6 +324,8 @@ int dde_canny(cv::InputArray input, cv::OutputArray output)
 
     cv::min(detailEnhanced, cfg.detailClip, detailClipped);
     cv::max(detailClipped, -cfg.detailClip, detailClipped);
+
+    imwrite_mdy_private_normalization_8u(detailClipped, "Enhancement_layer");
 
     cv::Mat reconstructed = baseCompressed + detailClipped;
 
@@ -479,16 +560,7 @@ int dde_denoise(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc
         cfg.sigmaColor,
         cfg.sigmaSpace);
 
-    /*cv::bilateralFilter(cache, baseLayer,
-        cfg.d,
-        cfg.sigmaColor,
-        cfg.sigmaSpace);*/
-
     cv::Mat detailLayer = img_norm - baseLayer;
-
-    cv::Mat detail_observe;
-    cv::normalize(detailLayer, detail_observe, 0, 255, cv::NORM_MINMAX, CV_8U);
-    //imwrite_mdy_private(detail_observe, "DDE_Detail");
 
     cv::Mat baseCompressed;
     cv::pow(baseLayer, cfg.baseGamma, baseCompressed);
@@ -506,14 +578,109 @@ int dde_denoise(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc
 
     cv::Mat dst;
     cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
-    //cv::normalize(reconstructed, dst, 0, 65535, cv::NORM_MINMAX, CV_16U);
-    //percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
 
     output.assign(dst);
 
     return 0;
 }
 
+int DDE_gradient_adaptive_gain(
+    cv::InputArray  input,
+    cv::OutputArray output,
+    double          baseGain,
+    double          k_lo = 2.0,   // 噪声下界倍数
+    double          k_hi = 15.0,  // 边缘上界倍数
+    double          steepness = 6.0)
+{
+    cv::Mat detailLayer = input.getMat();
+    CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
+
+    cv::Mat gradMag;
+	calc_Gradient_32F(detailLayer, gradMag);
+
+    double noise_grad = estimateNoiseFromGradient(gradMag, 0.50);
+
+    double lo_thresh = k_lo * noise_grad;
+    double hi_thresh = k_hi * noise_grad;
+
+    lo_thresh = std::max(lo_thresh, 1e-6);
+    hi_thresh = std::max(hi_thresh, lo_thresh * 2.0);
+
+    cv::Mat weightMap;
+    dualSidedSuppressionWeight(gradMag, weightMap, lo_thresh, hi_thresh, steepness);
+
+    // 权重=0 区域增益为1（不增强也不衰减），权重=1 区域增益为 baseGain
+    cv::Mat gainMap = 1.0 + (baseGain - 1.0) * weightMap;
+
+    output.assign(gainMap);
+    return 0;
+}
+
+int dde_gradient(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc_in)
+{
+    struct DDEConfig
+    {
+        int    d = 9;               // 邻域直径（像素，奇数）
+        double sigmaColor = 0.2;    // 值域 sigma
+        double sigmaSpace = 3.0;    // 空间域 sigma
+
+        double detailGain = 3.0;    // 细节增益系数
+        double detailClip = 0.2;    // 细节层截断，防止过增强（归一化）
+
+        double baseGamma = 0.5;    // gamma < 1 压缩亮区，提升暗区
+
+        double lowPct = 0.25;
+        double highPct = 99.75;
+    };
+
+    DDEConfig cfg;
+    cfg.baseGamma = 1.0;
+    cfg.d = 15;
+    cfg.sigmaSpace = 15.0;
+
+    cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+    cv::Mat nuc = nuc_in.getMat();
+    CV_CheckTypeEQ(nuc.type(), CV_32FC1, "");
+
+    cv::Mat img_norm;
+    double minVal, maxVal;
+
+    //cfg.sigmaSpace = cv::saturate_cast<double>(cfg.d) / 3.0;
+    cv::normalize(src, img_norm, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
+    cv::minMaxLoc(img_norm, &minVal, &maxVal);
+
+    std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
+
+    cv::Mat cache, baseLayer;
+    cv::bilateralFilter(img_norm, baseLayer,
+        cfg.d,
+        cfg.sigmaColor,
+        cfg.sigmaSpace);
+
+    cv::Mat detailLayer = img_norm - baseLayer;
+
+    cv::Mat baseCompressed;
+    cv::pow(baseLayer, cfg.baseGamma, baseCompressed);
+
+    cv::Mat gainMap;
+    DDE_gradient_adaptive_gain(detailLayer, gainMap, cfg.detailGain);
+    cv::Mat detailEnhanced = gainMap.mul(detailLayer);
+
+    cv::Mat detailClipped;
+
+    cv::min(detailEnhanced, cfg.detailClip, detailClipped);
+    cv::max(detailClipped, -cfg.detailClip, detailClipped);
+
+    cv::Mat reconstructed = baseCompressed + detailClipped;
+
+    cv::Mat dst;
+    cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
+
+    output.assign(dst);
+
+    return 0;
+}
 
 int test_DDE_improve()
 {
