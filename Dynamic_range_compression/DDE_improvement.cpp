@@ -144,7 +144,7 @@ static double estimateNoiseFromGradient(cv::InputArray input, double percentile 
     idx = std::min(idx, vals.size() - 1);
     std::nth_element(vals.begin(), vals.begin() + idx, vals.end());
 
-    return static_cast<double>(vals[idx]) / 0.6745;
+    return static_cast<double>(vals[idx]);
 }
 
 // 双端抑制权重图
@@ -187,6 +187,44 @@ static int dualSidedSuppressionWeight(
     }
 
     return 0;
+}
+
+static void compute_gradient_gainMap(
+    cv::InputArray input,
+    cv::OutputArray output,
+    double         baseGain,
+    double         lo_thresh,
+    double         hi_thresh,
+    double         steepness = 6.0)
+{
+    cv::Mat gradMag = input.getMat();
+    CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
+    output.create(gradMag.size(), CV_32FC1);
+    cv::Mat gainMap = output.getMat();
+
+    double inv_lo = 1.0 / (lo_thresh + 1e-9);
+    double inv_hi = 1.0 / (hi_thresh + 1e-9);
+    double extra = baseGain - 1.0;  // 超出1的增益部分
+
+    for (int i = 0; i < gradMag.rows; ++i)
+    {
+        const float* gp = gradMag.ptr<float>(i);
+        float* wp = gainMap.ptr<float>(i);
+
+        for (int j = 0; j < gradMag.cols; ++j)
+        {
+            double g = gp[j];
+
+            // 左侧：0 → 1，过lo_thresh时上升
+            double rise = 1.0 / (1.0 + std::exp(-steepness * (g * inv_lo - 1.0)));
+
+            // 右侧：1 → 0，过hi_thresh时下降
+            double fall = 1.0 / (1.0 + std::exp(steepness * (g * inv_hi - 1.0)));
+
+            // gain: 0 → baseGain → 1
+            wp[j] = static_cast<float>(rise * (1.0 + extra * fall));
+        }
+    }
 }
 
 int DDE_canny_adaptive_gain(cv::InputArray input, cv::OutputArray output, cv::InputArray in_canny, double baseGain, double sigma = 5.0)
@@ -590,33 +628,57 @@ int DDE_gradient_adaptive_gain(
     double          baseGain,
     double          k_lo = 2.0,   // 噪声下界倍数
     double          k_hi = 15.0,  // 边缘上界倍数
-    double          steepness = 6.0)
+    double          steepness = 2.0)
 {
     cv::Mat detailLayer = input.getMat();
     CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
 
     cv::Mat gradMag;
 	calc_Gradient_32F(detailLayer, gradMag);
+	imwrite_mdy_private_normalization_8u(gradMag, "DDE_DetailLayer_Gradient");
 
-    double noise_grad = estimateNoiseFromGradient(gradMag, 0.50);
+	//cv::GaussianBlur(gradMag, gradMag, cv::Size(0, 0), 5);
 
-    double lo_thresh = k_lo * noise_grad;
-    double hi_thresh = k_hi * noise_grad;
+	double noise_grad_8 = estimateNoiseFromGradient(gradMag, 0.8);
+    double noise_grad_9 = estimateNoiseFromGradient(gradMag, 0.9);
+	double noise_grad_95 = estimateNoiseFromGradient(gradMag, 0.97);
+	double noise_grad_99 = estimateNoiseFromGradient(gradMag, 0.99);
+
+	std::cout << "Gradient Noise Estimate - 80th Percentile: " << noise_grad_8 << ", 90th Percentile: " << noise_grad_9 << ", 95th Percentile: " << noise_grad_95 << std::endl;
+
+    double lo_thresh = 0.0;
+    double hi_thresh = 0.0;
+
+	if (noise_grad_8 > 0.5)
+	{
+		lo_thresh = noise_grad_95;
+		hi_thresh = noise_grad_99;
+	}
+	else
+	{
+		lo_thresh = noise_grad_8;
+		hi_thresh = noise_grad_9;
+	}
 
     lo_thresh = std::max(lo_thresh, 1e-6);
-    hi_thresh = std::max(hi_thresh, lo_thresh * 2.0);
+    hi_thresh = std::max(hi_thresh, 1e-5);
 
-    cv::Mat weightMap;
+    /*cv::Mat weightMap;
     dualSidedSuppressionWeight(gradMag, weightMap, lo_thresh, hi_thresh, steepness);
+    imwrite_mdy_private_normalization_8u(weightMap, "weightMap");*/
 
-    // 权重=0 区域增益为1（不增强也不衰减），权重=1 区域增益为 baseGain
-    cv::Mat gainMap = 1.0 + (baseGain - 1.0) * weightMap;
+    //cv::Mat gainMap = baseGain * weightMap;
+
+    cv::Mat gainMap;
+    compute_gradient_gainMap(gradMag, gainMap, baseGain * 2, lo_thresh, hi_thresh, steepness);
+    cv::GaussianBlur(gainMap, gainMap, cv::Size(0, 0), 5);
+	imwrite_mdy_private_normalization_8u(gainMap, "Gradient_GainMap");
 
     output.assign(gainMap);
     return 0;
 }
 
-int dde_gradient(cv::InputArray input, cv::OutputArray output, cv::InputArray nuc_in)
+int dde_gradient(cv::InputArray input, cv::OutputArray output)
 {
     struct DDEConfig
     {
@@ -640,8 +702,6 @@ int dde_gradient(cv::InputArray input, cv::OutputArray output, cv::InputArray nu
 
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
-    cv::Mat nuc = nuc_in.getMat();
-    CV_CheckTypeEQ(nuc.type(), CV_32FC1, "");
 
     cv::Mat img_norm;
     double minVal, maxVal;
@@ -721,7 +781,8 @@ int test_DDE_improve()
     {
         cv::Mat dst_DDE;
         //dde_denoise(images[i], dst_DDE, nuc);
-        dde_canny(images[i], dst_DDE);
+        //dde_canny(images[i], dst_DDE);
+		dde_gradient(images[i], dst_DDE);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
     }
 
