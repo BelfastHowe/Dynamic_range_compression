@@ -18,14 +18,33 @@ int local_variance_32F(cv::InputArray input, cv::OutputArray output, double sigm
     return 0;
 }
 
+int local_variance_32F_box(cv::InputArray input, cv::OutputArray output, int radius = 8)
+{
+    cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_32FC1, "");
+
+    cv::Size ksize(2 * radius + 1, 2 * radius + 1);
+
+    cv::Mat mu, mu2, variance;
+    cv::boxFilter(src, mu, CV_32F, ksize);
+    cv::boxFilter(src.mul(src), mu2, CV_32F, ksize);
+    variance = mu2 - mu.mul(mu);
+    cv::max(variance, 0.0f, variance);
+
+    output.assign(variance);
+    return 0;
+}
+
 int calc_Gradient_32F(cv::InputArray src, cv::OutputArray output)
 {
     cv::Mat img = src.getMat();
     CV_CheckTypeEQ(img.type(), CV_32FC1, "");
 
     cv::Mat gradX, gradY, gradMag;
-    cv::Scharr(img, gradX, CV_32F, 1, 0);
-    cv::Scharr(img, gradY, CV_32F, 0, 1);
+    //cv::Scharr(img, gradX, CV_32F, 1, 0);
+    //cv::Scharr(img, gradY, CV_32F, 0, 1);
+    cv::Sobel(img, gradX, CV_32F, 1, 0, 3);
+    cv::Sobel(img, gradY, CV_32F, 0, 1, 3);
     cv::magnitude(gradX, gradY, gradMag);
 
     output.assign(gradMag);
@@ -258,7 +277,7 @@ int DDE_canny_adaptive_gain(cv::InputArray input, cv::OutputArray output, cv::In
     //cv::morphologyEx(canny, canny, cv::MORPH_DILATE, element);
 
     cv::Mat canny_weight;
-    cv::GaussianBlur(detailLayer_residual_canny, canny_weight, cv::Size(0, 0), 3);
+    cv::GaussianBlur(detailLayer_gradient, canny_weight, cv::Size(0, 0), 5);
     cv::normalize(canny_weight, canny_weight, 0.0, 1.0, cv::NORM_MINMAX, CV_32F);
 
     cv::Mat variance;
@@ -508,7 +527,8 @@ int DDE_noise_adaptive_gain(cv::InputArray input, cv::OutputArray output, double
     CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
 
     cv::Mat variance;
-    local_variance_32F(detailLayer, variance, sigma);
+    //local_variance_32F(detailLayer, variance, sigma);
+	local_variance_32F_box(detailLayer, variance);
 
     //double noise_detail = estimateNoiseWaveletMAD(detailLayer);
     double noise_Variance = noise_Wavelet * noise_Wavelet;
@@ -628,7 +648,7 @@ int DDE_gradient_adaptive_gain(
     double          baseGain,
     double          k_lo = 2.0,   // 噪声下界倍数
     double          k_hi = 15.0,  // 边缘上界倍数
-    double          steepness = 2.0)
+    double          steepness = 6.0)
 {
     cv::Mat detailLayer = input.getMat();
     CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
@@ -637,26 +657,31 @@ int DDE_gradient_adaptive_gain(
 	calc_Gradient_32F(detailLayer, gradMag);
 	imwrite_mdy_private_normalization_8u(gradMag, "DDE_DetailLayer_Gradient");
 
-	//cv::GaussianBlur(gradMag, gradMag, cv::Size(0, 0), 5);
+	cv::GaussianBlur(gradMag, gradMag, cv::Size(0, 0), 5);
 
-	double noise_grad_8 = estimateNoiseFromGradient(gradMag, 0.8);
+	double noise_grad_5 = estimateNoiseFromGradient(gradMag, 0.5);
+    double noise_grad_7 = estimateNoiseFromGradient(gradMag, 0.7);
     double noise_grad_9 = estimateNoiseFromGradient(gradMag, 0.9);
-	double noise_grad_95 = estimateNoiseFromGradient(gradMag, 0.97);
+	double noise_grad_95 = estimateNoiseFromGradient(gradMag, 0.95);
 	double noise_grad_99 = estimateNoiseFromGradient(gradMag, 0.99);
 
-	std::cout << "Gradient Noise Estimate - 80th Percentile: " << noise_grad_8 << ", 90th Percentile: " << noise_grad_9 << ", 95th Percentile: " << noise_grad_95 << std::endl;
+	std::cout << "Gradient Noise Estimate - 50th Percentile: " << noise_grad_5 << ", 90th Percentile: " << noise_grad_9 << ", 95th Percentile: " << noise_grad_95 << std::endl;
+
+    cv::Scalar grad_mean, grad_stdv;
+	cv::meanStdDev(gradMag, grad_mean, grad_stdv);
+	std::cout << "Gradient Mean: " << grad_mean[0] << ", Gradient StdDev: " << grad_stdv[0] << std::endl;
 
     double lo_thresh = 0.0;
     double hi_thresh = 0.0;
 
-	if (noise_grad_8 > 0.5)
+	if (0)
 	{
-		lo_thresh = noise_grad_95;
+		lo_thresh = noise_grad_9;
 		hi_thresh = noise_grad_99;
 	}
 	else
 	{
-		lo_thresh = noise_grad_8;
+		lo_thresh = noise_grad_5;
 		hi_thresh = noise_grad_9;
 	}
 
@@ -670,8 +695,8 @@ int DDE_gradient_adaptive_gain(
     //cv::Mat gainMap = baseGain * weightMap;
 
     cv::Mat gainMap;
-    compute_gradient_gainMap(gradMag, gainMap, baseGain * 2, lo_thresh, hi_thresh, steepness);
-    cv::GaussianBlur(gainMap, gainMap, cv::Size(0, 0), 5);
+    compute_gradient_gainMap(gradMag, gainMap, baseGain, lo_thresh, hi_thresh, steepness);
+    //cv::GaussianBlur(gainMap, gainMap, cv::Size(0, 0), 5);
 	imwrite_mdy_private_normalization_8u(gainMap, "Gradient_GainMap");
 
     output.assign(gainMap);
@@ -693,12 +718,16 @@ int dde_gradient(cv::InputArray input, cv::OutputArray output)
 
         double lowPct = 0.25;
         double highPct = 99.75;
+
+		int radius = 10;              // 引导滤波r
+		double eps = 0.04;            // 引导滤波eps
     };
 
     DDEConfig cfg;
     cfg.baseGamma = 1.0;
     cfg.d = 15;
     cfg.sigmaSpace = 15.0;
+    cfg.eps = 0.003;
 
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
@@ -712,11 +741,18 @@ int dde_gradient(cv::InputArray input, cv::OutputArray output)
 
     std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
 
-    cv::Mat cache, baseLayer;
-    cv::bilateralFilter(img_norm, baseLayer,
-        cfg.d,
-        cfg.sigmaColor,
-        cfg.sigmaSpace);
+    cv::Mat baseLayer;
+    if (0)
+    {
+        cv::bilateralFilter(img_norm, baseLayer,
+            cfg.d,
+            cfg.sigmaColor,
+            cfg.sigmaSpace);
+    }
+    else
+    {
+        cv::ximgproc::guidedFilter(img_norm, img_norm, baseLayer, cfg.radius, cfg.eps);
+    }
 
     cv::Mat detailLayer = img_norm - baseLayer;
 
