@@ -40,6 +40,8 @@ int global_local_adaptive_fusion(cv::InputArray input, cv::OutputArray output);
 // 基于双边滤波的细节增强算法实现
 int dde_enhance(cv::InputArray input, cv::OutputArray output);
 
+int percentile_truncation_32F(cv::InputArray input, cv::OutputArray output, double low_percent, double high_percent);
+
 
 
 // TODO: 在此处引用程序需要的其他标头。

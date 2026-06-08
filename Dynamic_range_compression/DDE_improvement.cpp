@@ -153,8 +153,8 @@ int auto_canny_32F(cv::InputArray input, cv::OutputArray output, double sigma = 
 // 梯度低分位数估计噪声水平
 static double estimateNoiseFromGradient(cv::InputArray input, double percentile = 0.50)
 {
-	cv::Mat gradMag = input.getMat();
-	CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
+    cv::Mat gradMag = input.getMat();
+    CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
 
     std::vector<float> vals;
     gradMag.reshape(1, 1).copyTo(vals);
@@ -177,10 +177,10 @@ static int dualSidedSuppressionWeight(
     double hi_thresh,
     double steepness = 6.0)
 {
-	cv::Mat gradMag = input.getMat();
-	CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
-	output.create(gradMag.size(), CV_32FC1);
-	cv::Mat weightMap = output.getMat();
+    cv::Mat gradMag = input.getMat();
+    CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
+    output.create(gradMag.size(), CV_32FC1);
+    cv::Mat weightMap = output.getMat();
 
     // 归一化到 [lo, hi] 区间，使 sigmoid 参数与绝对幅度解耦
     double inv_lo = 1.0 / (lo_thresh + 1e-9);
@@ -265,9 +265,9 @@ int DDE_canny_adaptive_gain(cv::InputArray input, cv::OutputArray output, cv::In
     cv::Laplacian(detailLayer, detailLayer_laplacian, CV_32F, 3);
     imwrite_mdy_private_normalization_8u(detailLayer_laplacian, "DDE_DetailLayer_Laplacian");
 
-	cv::Mat detailLayer_gradient;
-	calc_Gradient_32F(detailLayer, detailLayer_gradient);
-	imwrite_mdy_private_normalization_8u(detailLayer_gradient, "DDE_DetailLayer_Gradient");
+    cv::Mat detailLayer_gradient;
+    calc_Gradient_32F(detailLayer, detailLayer_gradient);
+    imwrite_mdy_private_normalization_8u(detailLayer_gradient, "DDE_DetailLayer_Gradient");
 
     /*cv::Mat detailLayer_canny_diff;
     cv::absdiff(detailLayer_residual_canny, detailLayer_norm_canny, detailLayer_canny_diff);
@@ -528,7 +528,7 @@ int DDE_noise_adaptive_gain(cv::InputArray input, cv::OutputArray output, double
 
     cv::Mat variance;
     //local_variance_32F(detailLayer, variance, sigma);
-	local_variance_32F_box(detailLayer, variance);
+    local_variance_32F_box(detailLayer, variance);
 
     //double noise_detail = estimateNoiseWaveletMAD(detailLayer);
     double noise_Variance = noise_Wavelet * noise_Wavelet;
@@ -654,36 +654,36 @@ int DDE_gradient_adaptive_gain(
     CV_CheckTypeEQ(detailLayer.type(), CV_32F, "");
 
     cv::Mat gradMag;
-	calc_Gradient_32F(detailLayer, gradMag);
-	imwrite_mdy_private_normalization_8u(gradMag, "DDE_DetailLayer_Gradient");
+    calc_Gradient_32F(detailLayer, gradMag);
+    imwrite_mdy_private_normalization_8u(gradMag, "DDE_DetailLayer_Gradient");
 
-	cv::GaussianBlur(gradMag, gradMag, cv::Size(0, 0), 5);
+    cv::GaussianBlur(gradMag, gradMag, cv::Size(0, 0), 5);
 
-	double noise_grad_5 = estimateNoiseFromGradient(gradMag, 0.5);
+    double noise_grad_5 = estimateNoiseFromGradient(gradMag, 0.5);
     double noise_grad_7 = estimateNoiseFromGradient(gradMag, 0.7);
     double noise_grad_9 = estimateNoiseFromGradient(gradMag, 0.9);
-	double noise_grad_95 = estimateNoiseFromGradient(gradMag, 0.95);
-	double noise_grad_99 = estimateNoiseFromGradient(gradMag, 0.99);
+    double noise_grad_95 = estimateNoiseFromGradient(gradMag, 0.95);
+    double noise_grad_99 = estimateNoiseFromGradient(gradMag, 0.99);
 
-	std::cout << "Gradient Noise Estimate - 50th Percentile: " << noise_grad_5 << ", 90th Percentile: " << noise_grad_9 << ", 95th Percentile: " << noise_grad_95 << std::endl;
+    std::cout << "Gradient Noise Estimate - 50th Percentile: " << noise_grad_5 << ", 90th Percentile: " << noise_grad_9 << ", 95th Percentile: " << noise_grad_95 << std::endl;
 
     cv::Scalar grad_mean, grad_stdv;
-	cv::meanStdDev(gradMag, grad_mean, grad_stdv);
-	std::cout << "Gradient Mean: " << grad_mean[0] << ", Gradient StdDev: " << grad_stdv[0] << std::endl;
+    cv::meanStdDev(gradMag, grad_mean, grad_stdv);
+    std::cout << "Gradient Mean: " << grad_mean[0] << ", Gradient StdDev: " << grad_stdv[0] << std::endl;
 
     double lo_thresh = 0.0;
     double hi_thresh = 0.0;
 
-	if (0)
-	{
-		lo_thresh = noise_grad_9;
-		hi_thresh = noise_grad_99;
-	}
-	else
-	{
-		lo_thresh = noise_grad_5;
-		hi_thresh = noise_grad_9;
-	}
+    if (0)
+    {
+        lo_thresh = noise_grad_9;
+        hi_thresh = noise_grad_99;
+    }
+    else
+    {
+        lo_thresh = noise_grad_5;
+        hi_thresh = noise_grad_9;
+    }
 
     lo_thresh = std::max(lo_thresh, 1e-6);
     hi_thresh = std::max(hi_thresh, 1e-5);
@@ -697,7 +697,7 @@ int DDE_gradient_adaptive_gain(
     cv::Mat gainMap;
     compute_gradient_gainMap(gradMag, gainMap, baseGain, lo_thresh, hi_thresh, steepness);
     //cv::GaussianBlur(gainMap, gainMap, cv::Size(0, 0), 5);
-	imwrite_mdy_private_normalization_8u(gainMap, "Gradient_GainMap");
+    imwrite_mdy_private_normalization_8u(gainMap, "Gradient_GainMap");
 
     output.assign(gainMap);
     return 0;
@@ -719,8 +719,8 @@ int dde_gradient(cv::InputArray input, cv::OutputArray output)
         double lowPct = 0.25;
         double highPct = 99.75;
 
-		int radius = 10;              // 引导滤波r
-		double eps = 0.04;            // 引导滤波eps
+        int radius = 10;              // 引导滤波r
+        double eps = 0.04;            // 引导滤波eps
     };
 
     DDEConfig cfg;
@@ -786,8 +786,8 @@ int dde_gradient(cv::InputArray input, cv::OutputArray output)
  */
 static int calc_GradientCoherence(cv::InputArray input, cv::OutputArray output, int coherenceRadius = 3)
 {
-	cv::Mat gradMag = input.getMat();
-	CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
+    cv::Mat gradMag = input.getMat();
+    CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
 
     cv::Mat localMean;
     int ksize = 2 * coherenceRadius + 1;
@@ -817,8 +817,8 @@ static int apply_AsymmetricSigmoidGain(cv::InputArray input,
     double mid_lo = 0.30,  // rise中心：噪声抑制截止点
     double mid_hi = 0.70)  // fall中心：边缘增益起始点
 {
-	cv::Mat score = input.getMat();
-	CV_CheckTypeEQ(score.type(), CV_32FC1, "");
+    cv::Mat score = input.getMat();
+    CV_CheckTypeEQ(score.type(), CV_32FC1, "");
 
     // rise(x) = sigmoid(k_lo * (x - mid_lo))，控制噪声侧抑制斜率
     // fall(x) = sigmoid(k_hi * (x - mid_hi))，控制边缘侧增益斜率
@@ -848,13 +848,15 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
 
     cv::Mat gradMag;
     calc_Gradient_32F(detailLayer, gradMag);
-	imwrite_mdy_private_normalization_8u(gradMag, "detailLayer_Gradient");
+    imwrite_mdy_private_normalization_8u(gradMag, "detailLayer_Gradient");
 
-    const double pct_lo = 90.0;   // 低于此百分位 → 噪声
+	cv::GaussianBlur(gradMag, gradMag, cv::Size(3, 3), 0.5);
+
+    const double pct_lo = 95.0;   // 低于此百分位 → 噪声
     const double pct_hi = 98.0;   // 高于此百分位 → 边缘
 
-	auto thresh_lo = estimateNoiseFromGradient(gradMag, pct_lo / 100.0);
-	auto thresh_hi = estimateNoiseFromGradient(gradMag, pct_hi / 100.0);
+    auto thresh_lo = estimateNoiseFromGradient(gradMag, pct_lo / 100.0);
+    auto thresh_hi = estimateNoiseFromGradient(gradMag, pct_hi / 100.0);
 
     std::cout << "Gradient Magnitude Percentile: - " << thresh_lo << ", " << thresh_hi << std::endl;
 
@@ -863,6 +865,7 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
     ampScore = (ampScore - thresh_lo) / (thresh_hi - thresh_lo + 1e-6f);
     cv::min(ampScore, 1.0f, ampScore);
     cv::max(ampScore, 0.0f, ampScore);
+	imwrite_mdy_private_normalization_8u(ampScore, "Gradient_Amplitude_Score");
 
     //cv::Mat coherenceScore;
     //calc_GradientCoherence(gradMag, coherenceScore, 1);
@@ -870,8 +873,10 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
     //cv::Mat edgeScore = w_amp * ampScore + w_coh * coherenceScore;  // [0,1]
 
     cv::Mat gainMap;
-    apply_AsymmetricSigmoidGain(ampScore, gainMap, baseGain);
-	imwrite_mdy_private_normalization_8u(gainMap, "Gradient_Adaptive_GainMap");
+    //apply_AsymmetricSigmoidGain(ampScore, gainMap, baseGain);
+	cv::GaussianBlur(ampScore, ampScore, cv::Size(0, 0), 5);
+	cv::normalize(ampScore, gainMap, 0.0, 1.0, cv::NORM_MINMAX);
+    imwrite_mdy_private_normalization_8u(gainMap, "Gradient_Adaptive_GainMap");
 
     output.assign(gainMap);
     return 0;
@@ -882,7 +887,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 {
     struct DDEConfig
     {
-        int radius = 10;              // 引导滤波r
+        int radius = 5;              // 引导滤波r
         double eps = 0.04;            // 引导滤波eps
 
         // 细节增强
@@ -899,7 +904,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     DDEConfig cfg;
     cfg.baseGamma = 1.0;//先不做基础层gamma
-    cfg.eps = 200;
+    cfg.eps = 500;
 
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
@@ -915,12 +920,14 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
 
+	percentile_truncation_32F(img_norm, img_norm, cfg.lowPct, cfg.highPct);
+
     cv::Mat baseLayer;
-	cv::ximgproc::guidedFilter(img_norm, img_norm, baseLayer, cfg.radius, cfg.eps);
+    cv::ximgproc::guidedFilter(img_norm, img_norm, baseLayer, cfg.radius, cfg.eps);
 
     cv::Mat detailLayer = img_norm - baseLayer;
-	imwrite_mdy_private_normalization_8u(detailLayer, "Guided_DetailLayer");
-	imwrite_mdy_private_normalization_8u(baseLayer, "Guided_BaseLayer");
+    imwrite_mdy_private_normalization_8u(detailLayer, "Guided_DetailLayer");
+    imwrite_mdy_private_normalization_8u(baseLayer, "Guided_BaseLayer");
 
     cv::Mat baseCompressed;
     cv::pow(baseLayer, cfg.baseGamma, baseCompressed);
@@ -986,8 +993,8 @@ int test_DDE_improve()
         cv::Mat dst_DDE;
         //dde_denoise(images[i], dst_DDE, nuc);
         //dde_canny(images[i], dst_DDE);
-		//dde_gradient(images[i], dst_DDE);
-		dde_guided(images[i], dst_DDE);
+        //dde_gradient(images[i], dst_DDE);
+        dde_guided(images[i], dst_DDE);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
     }
 

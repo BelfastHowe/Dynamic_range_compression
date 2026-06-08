@@ -390,6 +390,49 @@ int percentile_mapping(cv::InputArray input, cv::OutputArray output, double lowP
     return 0;
 }
 
+int percentile_truncation_32F(cv::InputArray input, cv::OutputArray output, double low_percent, double high_percent)
+{
+    cv::Mat src = input.getMat();
+	CV_CheckTypeEQ(src.type(), CV_32FC1, "");
+
+    cv::Mat dn_16u;
+    src.convertTo(dn_16u, CV_16U);
+
+    const int H = dn_16u.rows, W = dn_16u.cols;
+    const int total = H * W;
+
+    std::vector<int> hist(16384, 0);
+    for (int i = 0; i < H; ++i)
+    {
+        const uint16_t* row = dn_16u.ptr<uint16_t>(i);
+        for (int j = 0; j < W; ++j)
+            hist[row[j] & 0x3FFF]++;
+    }
+
+    std::vector<int> cdf(16384, 0);
+    cdf[0] = hist[0];
+    for (int i = 1; i < 16384; ++i)
+        cdf[i] = cdf[i - 1] + hist[i];
+
+    const int low_num = (int)(total * low_percent / 100.f);
+    const int high_num = (int)(total * high_percent / 100.f);
+
+    int thr_low = 0, thr_high = 16383;
+    for (int i = 0; i < 16383; ++i)
+    {
+        if (cdf[i] <= low_num && cdf[i + 1] > low_num)  thr_low = i + 1;
+        if (cdf[i] < high_num && cdf[i + 1] >= high_num) thr_high = i;
+    }
+
+    cv::Mat clip_32f;
+    src.copyTo(clip_32f);
+    clip_32f = cv::max(clip_32f, cv::saturate_cast<float>(thr_low));
+    clip_32f = cv::min(clip_32f, cv::saturate_cast<float>(thr_high));
+
+	output.assign(clip_32f);
+    return 0;
+}
+
 // 16UC1图像的直方图均衡化函数
 int equalize_hist_16UC1(cv::InputArray input, cv::OutputArray output, double maxVal = 65535.0)
 {
