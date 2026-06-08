@@ -41,10 +41,10 @@ int calc_Gradient_32F(cv::InputArray src, cv::OutputArray output)
     CV_CheckTypeEQ(img.type(), CV_32FC1, "");
 
     cv::Mat gradX, gradY, gradMag;
-    //cv::Scharr(img, gradX, CV_32F, 1, 0);
-    //cv::Scharr(img, gradY, CV_32F, 0, 1);
-    cv::Sobel(img, gradX, CV_32F, 1, 0, 3);
-    cv::Sobel(img, gradY, CV_32F, 0, 1, 3);
+    cv::Scharr(img, gradX, CV_32F, 1, 0);
+    cv::Scharr(img, gradY, CV_32F, 0, 1);
+    //cv::Sobel(img, gradX, CV_32F, 1, 0, 3);
+    //cv::Sobel(img, gradY, CV_32F, 0, 1, 3);
     cv::magnitude(gradX, gradY, gradMag);
 
     output.assign(gradMag);
@@ -778,6 +778,174 @@ int dde_gradient(cv::InputArray input, cv::OutputArray output)
     return 0;
 }
 
+/**
+ * @brief 计算梯度局部一致性分数 [0,1]
+ *        一致性 = localMean / (center + eps)，归一化后饱和到1
+ *        真边缘：邻域均值接近中心 → 分数高
+ *        孤立噪声点：邻域均值远低于中心 → 分数低
+ */
+static int calc_GradientCoherence(cv::InputArray input, cv::OutputArray output, int coherenceRadius = 3)
+{
+	cv::Mat gradMag = input.getMat();
+	CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
+
+    cv::Mat localMean;
+    int ksize = 2 * coherenceRadius + 1;
+    cv::boxFilter(gradMag, localMean, CV_32F, cv::Size(ksize, ksize));
+
+    // coherence = localMean / (gradMag + eps)，再clamp到[0,1]
+    cv::Mat coherence;
+    cv::divide(localMean, gradMag + 1e-6f, coherence);
+    cv::min(coherence, 1.0f, coherence);
+    output.assign(coherence);  // [0,1]，越大越像真实边缘
+
+    return 0;
+}
+
+/**
+ * @brief 非对称双侧sigmoid增益曲线
+ *        gain(x) = rise(x) * (1 + (baseGain - 1) * fall(x))
+ *        其中 x 是融合后的"边缘得分" [0,1]
+ *        x→0 : gain→0（噪声抑制）
+ *        x→1 : gain→baseGain（边缘增强）
+ */
+static int apply_AsymmetricSigmoidGain(cv::InputArray input,
+    cv::OutputArray output,
+    double baseGain,
+    double k_lo = 6.0,     // rise陡峭度
+    double k_hi = 6.0,    // fall陡峭度
+    double mid_lo = 0.30,  // rise中心：噪声抑制截止点
+    double mid_hi = 0.70)  // fall中心：边缘增益起始点
+{
+	cv::Mat score = input.getMat();
+	CV_CheckTypeEQ(score.type(), CV_32FC1, "");
+
+    // rise(x) = sigmoid(k_lo * (x - mid_lo))，控制噪声侧抑制斜率
+    // fall(x) = sigmoid(k_hi * (x - mid_hi))，控制边缘侧增益斜率
+    // 两者组合：低分→0，高分→baseGain
+
+    cv::Mat rise, fall;
+
+    // rise: x < threshold → 接近0，x > threshold → 接近1
+    cv::exp(-k_lo * (score - mid_lo), rise);
+    rise = 1.0 / (1.0 + rise);  // sigmoid
+
+    // fall: x > threshold → 接近1，驱动增益到baseGain
+    cv::exp(-k_hi * (score - mid_hi), fall);
+    fall = 1.0 / (1.0 + fall);  // sigmoid
+
+    // gain = rise * (1 + (baseGain - 1) * fall)
+    cv::Mat gainMap = rise.mul(1.0 + (baseGain - 1.0) * fall);
+    output.assign(gainMap);
+
+    return 0;
+}
+
+int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, double baseGain, double sigma = 5.0)
+{
+    cv::Mat detailLayer = input.getMat();
+    CV_CheckTypeEQ(detailLayer.type(), CV_32FC1, "");
+
+    cv::Mat gradMag;
+    calc_Gradient_32F(detailLayer, gradMag);
+	imwrite_mdy_private_normalization_8u(gradMag, "detailLayer_Gradient");
+
+    const double pct_lo = 90.0;   // 低于此百分位 → 噪声
+    const double pct_hi = 98.0;   // 高于此百分位 → 边缘
+
+	auto thresh_lo = estimateNoiseFromGradient(gradMag, pct_lo / 100.0);
+	auto thresh_hi = estimateNoiseFromGradient(gradMag, pct_hi / 100.0);
+
+    std::cout << "Gradient Magnitude Percentile: - " << thresh_lo << ", " << thresh_hi << std::endl;
+
+    cv::Mat ampScore;
+    gradMag.convertTo(ampScore, CV_32F);
+    ampScore = (ampScore - thresh_lo) / (thresh_hi - thresh_lo + 1e-6f);
+    cv::min(ampScore, 1.0f, ampScore);
+    cv::max(ampScore, 0.0f, ampScore);
+
+    //cv::Mat coherenceScore;
+    //calc_GradientCoherence(gradMag, coherenceScore, 1);
+    //const double w_amp = 0.7, w_coh = 0.3;
+    //cv::Mat edgeScore = w_amp * ampScore + w_coh * coherenceScore;  // [0,1]
+
+    cv::Mat gainMap;
+    apply_AsymmetricSigmoidGain(ampScore, gainMap, baseGain);
+	imwrite_mdy_private_normalization_8u(gainMap, "Gradient_Adaptive_GainMap");
+
+    output.assign(gainMap);
+    return 0;
+}
+
+
+int dde_guided(cv::InputArray input, cv::OutputArray output)
+{
+    struct DDEConfig
+    {
+        int radius = 10;              // 引导滤波r
+        double eps = 0.04;            // 引导滤波eps
+
+        // 细节增强
+        double detailGain = 3.0;    // 细节增益系数
+        double detailClip = 0.2;    // 细节层截断，防止过增强（归一化）
+
+        // 基础层压缩
+        double baseGamma = 0.5;    // gamma < 1 压缩亮区，提升暗区
+
+        // 输出
+        double lowPct = 0.5;
+        double highPct = 98.0;
+    };
+
+    DDEConfig cfg;
+    cfg.baseGamma = 1.0;//先不做基础层gamma
+    cfg.eps = 200;
+
+    cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    // Step 1:
+    cv::Mat img_norm;
+    double minVal, maxVal;
+
+    src.convertTo(img_norm, CV_32F);
+    cv::minMaxLoc(img_norm, &minVal, &maxVal);
+    auto dynamicRange = maxVal - minVal;
+    cfg.detailClip = dynamicRange * cfg.detailClip;
+
+    std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
+
+    cv::Mat baseLayer;
+	cv::ximgproc::guidedFilter(img_norm, img_norm, baseLayer, cfg.radius, cfg.eps);
+
+    cv::Mat detailLayer = img_norm - baseLayer;
+	imwrite_mdy_private_normalization_8u(detailLayer, "Guided_DetailLayer");
+	imwrite_mdy_private_normalization_8u(baseLayer, "Guided_BaseLayer");
+
+    cv::Mat baseCompressed;
+    cv::pow(baseLayer, cfg.baseGamma, baseCompressed);
+
+    cv::Mat gainMap;
+    DDE_adaptive_gain_guided_grad(detailLayer, gainMap, cfg.detailGain);
+    cv::Mat detailEnhanced = gainMap.mul(detailLayer);
+
+    cv::Mat detailClipped;
+
+    cv::min(detailEnhanced, cfg.detailClip, detailClipped);
+    cv::max(detailClipped, -cfg.detailClip, detailClipped);
+
+    cv::Mat reconstructed = baseCompressed + detailClipped;
+
+    cv::Mat dst;
+    cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
+    //percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
+
+    output.assign(dst);
+
+    return 0;
+}
+
+
 int test_DDE_improve()
 {
     fs::path inputDir(NOISE_IMAGE_DIR);
@@ -811,14 +979,15 @@ int test_DDE_improve()
     }
 
     cv::Mat nuc;
-    estimate_NUC_Temporal(images, nuc);
+    //estimate_NUC_Temporal(images, nuc);
 
     for (int i = 0; i < images.size(); ++i)
     {
         cv::Mat dst_DDE;
         //dde_denoise(images[i], dst_DDE, nuc);
         //dde_canny(images[i], dst_DDE);
-		dde_gradient(images[i], dst_DDE);
+		//dde_gradient(images[i], dst_DDE);
+		dde_guided(images[i], dst_DDE);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
     }
 

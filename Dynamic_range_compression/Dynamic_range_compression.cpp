@@ -664,7 +664,7 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
         // 基础层分离（双边滤波）
         int    d = 3;               // 邻域直径（像素，奇数）
         double sigmaColor = 0.2;    // 值域 sigma
-		double sigmaSpace = 3.0;    // 空间域 sigma
+        double sigmaSpace = 3.0;    // 空间域 sigma
 
         // 细节增强
         double detailGain = 3.0;    // 细节增益系数
@@ -705,10 +705,10 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
         cfg.sigmaSpace = cv::saturate_cast<double>(cfg.d) / 3.0;
         src.convertTo(img_norm, CV_32F);
         cv::minMaxLoc(img_norm, &minVal, &maxVal);
-		//auto dynamicRange = maxVal - minVal;
+        //auto dynamicRange = maxVal - minVal;
         double dynamicRange = 1461;
         cfg.sigmaColor = dynamicRange * cfg.sigmaColor;
-		cfg.detailClip = dynamicRange * cfg.detailClip;
+        cfg.detailClip = dynamicRange * cfg.detailClip;
     }
 
     std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
@@ -725,7 +725,7 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
 
     cv::Mat detail_observe;
     cv::normalize(detailLayer, detail_observe, 0, 255, cv::NORM_MINMAX, CV_8U);
-	//imwrite_mdy_private(detail_observe, "DDE_Detail");
+    //imwrite_mdy_private(detail_observe, "DDE_Detail");
 
     // Step 3: 基础层 Gamma 压缩，抑制大范围光照不均
     cv::Mat baseCompressed;
@@ -755,6 +755,69 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output)
 
     return 0;
 }
+
+int ir_pipeline_cv(cv::InputArray input,
+    cv::OutputArray output,
+    int   sigma_space = 10,
+    int   sigma_color = 30,
+    float low_percent = 0.5f,
+    float high_percent = 2.0f,
+    float sharpen_strength = 0.5f)
+{
+    cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    // ── 双边滤波 ─────────────────────────────
+    cv::Mat src_32f;
+    src.convertTo(src_32f, CV_32F);
+
+    cv::Mat dn_32f;
+    cv::bilateralFilter(src_32f, dn_32f, 7, sigma_color, sigma_space);
+
+    // ── 百分位截断 ───────────────────────────
+    cv::Mat dn_16u;
+    dn_32f.convertTo(dn_16u, CV_16U);
+
+    const int H = dn_16u.rows, W = dn_16u.cols;
+    const int total = H * W;
+
+    std::vector<int> hist(16384, 0);
+    for (int i = 0; i < H; ++i)
+    {
+        const uint16_t* row = dn_16u.ptr<uint16_t>(i);
+        for (int j = 0; j < W; ++j)
+            hist[row[j] & 0x3FFF]++;
+    }
+
+    std::vector<int> cdf(16384, 0);
+    cdf[0] = hist[0];
+    for (int i = 1; i < 16384; ++i)
+        cdf[i] = cdf[i - 1] + hist[i];
+
+    const int low_num = (int)(total * low_percent / 100.f);
+    const int high_num = (int)(total * (100.f - high_percent) / 100.f);
+
+    int thr_low = 0, thr_high = 16383;
+    for (int i = 0; i < 16383; ++i)
+    {
+        if (cdf[i] <= low_num && cdf[i + 1] > low_num)  thr_low = i + 1;
+        if (cdf[i] < high_num && cdf[i + 1] >= high_num) thr_high = i;
+    }
+
+    cv::Mat clip_32f;
+    dn_32f.copyTo(clip_32f);
+    clip_32f = cv::max(clip_32f, cv::saturate_cast<float>(thr_low));
+    clip_32f = cv::min(clip_32f, cv::saturate_cast<float>(thr_high));
+
+    // ── 线性归一化到 [0, 255] ───────────────
+    cv::Mat norm_8u;
+    cv::normalize(clip_32f, norm_8u, 0, 255, cv::NORM_MINMAX, CV_8U);
+
+    cv::Mat dst = norm_8u.clone();
+    output.assign(dst);
+    return 0;
+}
+
 
 int Test_single_method()
 {
@@ -790,9 +853,9 @@ int Test_single_method()
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
         cv::subtract(16383, src, src); 
 
-        cv::Mat dst_linear;
+        /*cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
-        imwrite_mdy_private(dst_linear, "Linear");
+        imwrite_mdy_private(dst_linear, "Linear");*/
 
 
         /*cv::Mat dst_CLAHE;
@@ -824,13 +887,17 @@ int Test_single_method()
         single_scale_retinex(src, dst_SSR, 50);
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
+		cv::Mat dst_ir_pipeline;
+		ir_pipeline_cv(src, dst_ir_pipeline, 10, 60, 0.5f, 2.0f, 0.5f);
+		imwrite_mdy_private(dst_ir_pipeline, "IR_Pipeline");
 
-        entropy += calcEntropy(dst_linear);
-        ag += calcAverageGradient(dst_linear);
+
+        entropy += calcEntropy(dst_ir_pipeline);
+        ag += calcAverageGradient(dst_ir_pipeline);
         /*ssim += calcSSIM(dst_DDE, dst_linear);*/
         double minVal, maxVal;
         cv::minMaxLoc(src, &minVal, &maxVal);
-		auto range = maxVal - minVal;
+        auto range = maxVal - minVal;
         range_sum += range;
         imageCount++;
 
@@ -844,7 +911,7 @@ int Test_single_method()
         std::cout << "Average Entropy: " << entropy / imageCount << std::endl;
         std::cout << "Average Gradient: " << ag / imageCount << std::endl;
         std::cout << "Average SSIM: " << ssim / imageCount << std::endl;
-		std::cout << "Average Range: " << range_sum / imageCount << std::endl;
+        std::cout << "Average Range: " << range_sum / imageCount << std::endl;
     }
 
     return 0;
