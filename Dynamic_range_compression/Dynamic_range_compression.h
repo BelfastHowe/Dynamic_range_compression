@@ -42,6 +42,21 @@ int dde_enhance(cv::InputArray input, cv::OutputArray output);
 
 int percentile_truncation_32F(cv::InputArray input, cv::OutputArray output, double low_percent, double high_percent);
 
+// 直方图显示配置结构体
+struct HistDisplayConfig
+{
+    int    histW = 1024;          // 显示窗口宽度
+    int    histH = 576;          // 显示窗口高度
+    int    binCount = 256;          // 直方图 bin 数量
+    cv::Scalar barColor = cv::Scalar(200, 200, 200);  // 柱状颜色
+    cv::Scalar bgColor = cv::Scalar(30, 30, 30);   // 背景颜色
+    cv::Scalar axisColor = cv::Scalar(0, 0, 255);  // 坐标轴颜色
+    bool   logScale = false;        // 是否对数纵轴
+    std::string winName = "Histogram"; // 窗口名称
+};
+
+int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {});
+
 
 
 // TODO: 在此处引用程序需要的其他标头。

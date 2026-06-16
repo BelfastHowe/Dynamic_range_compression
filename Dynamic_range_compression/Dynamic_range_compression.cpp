@@ -42,7 +42,7 @@ int imwrite_mdy_private(cv::InputArray input, const std::string file_name)
     std::filesystem::path output_path = result_dir / (oss.str() + file_name + ".png");
     std::string output_file_name = output_path.string();
 
-    std::cout << "已保存至: " << output_file_name << std::endl;
+    //std::cout << "已保存至: " << output_file_name << std::endl;
     cv::imwrite(output_file_name, src);
     cv::waitKey(1);
 
@@ -242,33 +242,44 @@ int rgb2png()
     return 0;
 }
 
-// 直方图显示配置结构体
-struct HistDisplayConfig
-{
-    int    histW = 1024;          // 显示窗口宽度
-    int    histH = 576;          // 显示窗口高度
-    int    binCount = 256;          // 直方图 bin 数量
-    cv::Scalar barColor = cv::Scalar(200, 200, 200);  // 柱状颜色
-    cv::Scalar bgColor = cv::Scalar(30, 30, 30);   // 背景颜色
-    cv::Scalar axisColor = cv::Scalar(180, 180, 180);  // 坐标轴颜色
-    bool   logScale = false;        // 是否对数纵轴
-    std::string winName = "Histogram"; // 窗口名称
-};
-
 // 显示单通道图像的直方图，支持8位和16位图像
-int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {})
+int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg)
 {
-    cv::Mat img = input.getMat().clone();
+    cv::Mat img = input.getMat();
 
     if (img.channels() != 1)
         return -1;
-    if (img.depth() != CV_8U && img.depth() != CV_16U)
+    if (img.depth() != CV_8U && img.depth() != CV_16U && img.depth() != CV_32F)
+    {
+		std::cerr << "不支持的图像深度！仅支持8位、16位和32位单通道图像。" << std::endl;
         return -1;
+    }
 
     // Step 1: 计算直方图
-    float rangeMax = (img.depth() == CV_8U) ? 256.0f : 65536.0f;
-    float ranges[] = { 0, rangeMax };
+    float rangeMin = 0.0f;
+    float rangeMax = 256.0f;
+
+    if (img.depth() == CV_8U)
+    {
+        rangeMax = 256.0f;
+    }
+    else if (img.depth() == CV_16U)
+    {
+        rangeMax = 65536.0f;
+    }
+    else if (img.depth() == CV_32F)
+    {
+        // 针对 32F 动态获取范围
+        double dMin, dMax;
+        cv::minMaxLoc(img, &dMin, &dMax);
+        rangeMin = static_cast<float>(dMin);
+        rangeMax = static_cast<float>(dMax);
+        if (rangeMin == rangeMax) rangeMax += 1e-5f;
+    }
+
+    float ranges[] = { rangeMin, rangeMax };
     const float* histRange = { ranges };
+
     int binCount = cfg.binCount;
 
     cv::Mat hist;
@@ -315,7 +326,7 @@ int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {})
     for (int i = 0; i <= tickCount; i++)
     {
         int x = i * (cfg.histW - 1) / tickCount;
-        float val = i * rangeMax / tickCount;
+        float val = rangeMin + i * (rangeMax - rangeMin) / tickCount;
 
         // 刻度线
         cv::line(canvas,
@@ -324,21 +335,33 @@ int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {})
             cfg.axisColor, 1);
 
         // 刻度标签
-        std::string label = (val >= 1000)
-            ? std::to_string(static_cast<int>(val / 1000)) + "k"
-            : std::to_string(static_cast<int>(val));
+        std::string label;
+        if (img.depth() == CV_32F)
+        {
+            // 使用 C++ 标准库控制浮点数输出格式（保留2位小数）
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.2f", val);
+            label = buf;
+        }
+        else
+        {
+            label = (val >= 1000) ? std::to_string(static_cast<int>(val / 1000)) + "k"
+                : std::to_string(static_cast<int>(val));
+        }
+
         cv::putText(canvas, label,
             cv::Point(x + 2, cfg.histH - 6),
             cv::FONT_HERSHEY_PLAIN, 0.7, cfg.axisColor, 1);
     }
 
     // 深度标注
-    std::string depthLabel = (img.depth() == CV_8U) ? "8bit" : "16bit";
+    std::string depthLabel = (img.depth() == CV_8U) ? "8bit" : ((img.depth() == CV_16U) ? "16bit" : "32Float");
     if (cfg.logScale) depthLabel += " (log)";
     cv::putText(canvas, depthLabel,
         cv::Point(cfg.histW - 55, 15),
         cv::FONT_HERSHEY_PLAIN, 0.9, cfg.axisColor, 1);
 
+	imwrite_mdy_private(canvas, "histogram");
     cv::imshow(cfg.winName, canvas);
     cv::waitKey(1);
 
@@ -817,6 +840,15 @@ int ir_pipeline_cv(cv::InputArray input,
     cv::Mat dn_32f;
     cv::bilateralFilter(src_32f, dn_32f, 7, sigma_color, sigma_space);
 
+	double minVal, maxVal;
+	cv::minMaxLoc(src_32f, &minVal, &maxVal);
+	std::cout << "base_layer_MinMax: " << minVal << "-" << maxVal << std::endl;
+
+	imwrite_mdy_private_normalization_8u(src, "IR_src");
+	imwrite_mdy_private_normalization_8u(dn_32f, "IR_base");
+	cv::Mat detail = src_32f - dn_32f;
+	imwrite_mdy_private_normalization_8u(detail, "IR_detail");
+
     // ── 百分位截断 ───────────────────────────
     cv::Mat dn_16u;
     dn_32f.convertTo(dn_16u, CV_16U);
@@ -852,9 +884,20 @@ int ir_pipeline_cv(cv::InputArray input,
     clip_32f = cv::max(clip_32f, cv::saturate_cast<float>(thr_low));
     clip_32f = cv::min(clip_32f, cv::saturate_cast<float>(thr_high));
 
+    // ── laplacian锐化 ───────────────
+    cv::Mat laplacian;
+    cv::Laplacian(clip_32f, laplacian, CV_32F);
+
+	laplacian *= sharpen_strength;
+    cv::Mat sharpen_clip = clip_32f * 0.25;
+
+	cv::min(laplacian, sharpen_clip, laplacian);
+    cv::max(laplacian, -sharpen_clip, laplacian);
+    cv::Mat sharpen = clip_32f - laplacian;
+
     // ── 线性归一化到 [0, 255] ───────────────
     cv::Mat norm_8u;
-    cv::normalize(clip_32f, norm_8u, 0, 255, cv::NORM_MINMAX, CV_8U);
+    cv::normalize(sharpen, norm_8u, 0, 255, cv::NORM_MINMAX, CV_8U);
 
     cv::Mat dst = norm_8u.clone();
     output.assign(dst);

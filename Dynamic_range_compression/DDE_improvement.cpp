@@ -150,8 +150,8 @@ int auto_canny_32F(cv::InputArray input, cv::OutputArray output, double sigma = 
     return 0;
 }
 
-// 梯度低分位数估计噪声水平
-static double estimateNoiseFromGradient(cv::InputArray input, double percentile = 0.50)
+// 计算矩阵的指定百分位数
+static double calcMatPercentile(cv::InputArray input, double percentile = 0.50)
 {
     cv::Mat gradMag = input.getMat();
     CV_CheckTypeEQ(gradMag.type(), CV_32FC1, "");
@@ -659,11 +659,11 @@ int DDE_gradient_adaptive_gain(
 
     cv::GaussianBlur(gradMag, gradMag, cv::Size(0, 0), 5);
 
-    double noise_grad_5 = estimateNoiseFromGradient(gradMag, 0.5);
-    double noise_grad_7 = estimateNoiseFromGradient(gradMag, 0.7);
-    double noise_grad_9 = estimateNoiseFromGradient(gradMag, 0.9);
-    double noise_grad_95 = estimateNoiseFromGradient(gradMag, 0.95);
-    double noise_grad_99 = estimateNoiseFromGradient(gradMag, 0.99);
+    double noise_grad_5 = calcMatPercentile(gradMag, 0.5);
+    double noise_grad_7 = calcMatPercentile(gradMag, 0.7);
+    double noise_grad_9 = calcMatPercentile(gradMag, 0.9);
+    double noise_grad_95 = calcMatPercentile(gradMag, 0.95);
+    double noise_grad_99 = calcMatPercentile(gradMag, 0.99);
 
     std::cout << "Gradient Noise Estimate - 50th Percentile: " << noise_grad_5 << ", 90th Percentile: " << noise_grad_9 << ", 95th Percentile: " << noise_grad_95 << std::endl;
 
@@ -848,24 +848,49 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
 
     cv::Mat gradMag;
     calc_Gradient_32F(detailLayer, gradMag);
-    imwrite_mdy_private_normalization_8u(gradMag, "detailLayer_Gradient");
+    //imwrite_mdy_private_normalization_8u(gradMag, "Gradient");
 
-	cv::GaussianBlur(gradMag, gradMag, cv::Size(3, 3), 0.5);
+	HistDisplayConfig histCfg;
+    showHistogram(gradMag, histCfg);
 
-    const double pct_lo = 95.0;   // 低于此百分位 → 噪声
-    const double pct_hi = 98.0;   // 高于此百分位 → 边缘
+    cv::Mat detail_dn;
+	//cv::GaussianBlur(detailLayer, detail_dn, cv::Size(7, 7), 10);
+    detail_dn = detailLayer.clone();
+	//imwrite_mdy_private_normalization_8u(detail_dn, "detail_Denoised");
 
-    auto thresh_lo = estimateNoiseFromGradient(gradMag, pct_lo / 100.0);
-    auto thresh_hi = estimateNoiseFromGradient(gradMag, pct_hi / 100.0);
+	cv::Mat gradMag_dn;
+	calc_Gradient_32F(detail_dn, gradMag_dn);
+	imwrite_mdy_private_normalization_8u(gradMag_dn, "dn_Gradient");
 
-    std::cout << "Gradient Magnitude Percentile: - " << thresh_lo << ", " << thresh_hi << std::endl;
+    //cv::GaussianBlur(gradMag, gradMag, cv::Size(3, 3), 0.5);
+
+    const double pct_lo = 85.0;   // 低于此百分位 → 噪声
+    const double pct_hi = 90.0;   // 高于此百分位 → 边缘
+
+    auto thresh_lo = calcMatPercentile(gradMag, pct_lo / 100.0);
+    auto thresh_hi = calcMatPercentile(gradMag, pct_hi / 100.0);
+
+    std::cout << "Gradient Magnitude Percentile: " << thresh_lo << ", " << thresh_hi << std::endl;
+
+	auto thr_dn = calcMatPercentile(gradMag_dn, 95 / 100.0);
+	std::cout << "Denoised Gradient Magnitude Percentile: " << thr_dn << std::endl;
 
     cv::Mat ampScore;
     gradMag.convertTo(ampScore, CV_32F);
     ampScore = (ampScore - thresh_lo) / (thresh_hi - thresh_lo + 1e-6f);
     cv::min(ampScore, 1.0f, ampScore);
     cv::max(ampScore, 0.0f, ampScore);
-	imwrite_mdy_private_normalization_8u(ampScore, "Gradient_Amplitude_Score");
+    ampScore *= baseGain;
+    //imwrite_mdy_private_normalization_8u(ampScore, "Gradient_Amplitude_Score");
+
+    cv::Mat score_dn;
+	cv::threshold(gradMag_dn, score_dn, 120.0, 3.0, cv::THRESH_BINARY);
+	imwrite_mdy_private_normalization_8u(score_dn, "Denoised_Score");
+
+    cv::Mat score_med;
+	//cv::medianBlur(score_dn, score_med, 3);
+	score_med = score_dn.clone();
+	imwrite_mdy_private_normalization_8u(score_med, "dn_Score_Median");
 
     //cv::Mat coherenceScore;
     //calc_GradientCoherence(gradMag, coherenceScore, 1);
@@ -874,9 +899,9 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
 
     cv::Mat gainMap;
     //apply_AsymmetricSigmoidGain(ampScore, gainMap, baseGain);
-	cv::GaussianBlur(ampScore, ampScore, cv::Size(0, 0), 5);
-	cv::normalize(ampScore, gainMap, 0.0, 1.0, cv::NORM_MINMAX);
-    imwrite_mdy_private_normalization_8u(gainMap, "Gradient_Adaptive_GainMap");
+    cv::GaussianBlur(score_med, gainMap, cv::Size(0, 0), 5);
+	cv::normalize(gainMap, gainMap, 0.0, baseGain, cv::NORM_MINMAX);
+    imwrite_mdy_private_normalization_8u(gainMap, "GainMap");
 
     output.assign(gainMap);
     return 0;
@@ -887,11 +912,15 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 {
     struct DDEConfig
     {
-        int radius = 5;              // 引导滤波r
+        int radius = 3;              // 引导滤波r
         double eps = 0.04;            // 引导滤波eps
 
+        int    d = 7;               // 邻域直径（像素，奇数）
+        double sigmaColor = 30;    // 值域 sigma
+        double sigmaSpace = 10;    // 空间域 sigma
+
         // 细节增强
-        double detailGain = 3.0;    // 细节增益系数
+        double detailGain = 15.0;    // 细节增益系数
         double detailClip = 0.2;    // 细节层截断，防止过增强（归一化）
 
         // 基础层压缩
@@ -916,16 +945,17 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
     src.convertTo(img_norm, CV_32F);
     cv::minMaxLoc(img_norm, &minVal, &maxVal);
     auto dynamicRange = maxVal - minVal;
-    cfg.detailClip = dynamicRange * cfg.detailClip;
 
     std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
 
-	percentile_truncation_32F(img_norm, img_norm, cfg.lowPct, cfg.highPct);
+    percentile_truncation_32F(img_norm, img_norm, cfg.lowPct, cfg.highPct);
 
     cv::Mat baseLayer;
     cv::ximgproc::guidedFilter(img_norm, img_norm, baseLayer, cfg.radius, cfg.eps);
+    //cv::bilateralFilter(img_norm, baseLayer, cfg.d, cfg.sigmaColor, cfg.sigmaSpace);
 
     cv::Mat detailLayer = img_norm - baseLayer;
+    cv::GaussianBlur(detailLayer, detailLayer, cv::Size(5, 5), 1.0);
     imwrite_mdy_private_normalization_8u(detailLayer, "Guided_DetailLayer");
     imwrite_mdy_private_normalization_8u(baseLayer, "Guided_BaseLayer");
 
@@ -935,11 +965,26 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
     cv::Mat gainMap;
     DDE_adaptive_gain_guided_grad(detailLayer, gainMap, cfg.detailGain);
     cv::Mat detailEnhanced = gainMap.mul(detailLayer);
+    double clip_ratio = 0.0;
+    {
+		double de_min, de_max;
+		cv::minMaxLoc(detailEnhanced, &de_min, &de_max);
+		std::cout << "Detail Enhanced - MinMax: " << de_min << "-" << de_max << std::endl;
+		double base_min, base_max;
+		cv::minMaxLoc(baseCompressed, &base_min, &base_max);
+		std::cout << "Base Compressed - MinMax: " << base_min << "-" << base_max << std::endl;
+        double min_ratio, max_ratio;
+        min_ratio = de_min / (base_max - base_min);
+		max_ratio = de_max / (base_max - base_min);
+		std::cout << "Detail to Base Ratio: " << min_ratio << "-" << max_ratio << std::endl;
+		double abs_max_de = std::max(std::abs(de_min), std::abs(de_max));
+		clip_ratio = cfg.detailClip * (base_max - base_min) / abs_max_de;
+    }
 
     cv::Mat detailClipped;
+	detailClipped = detailEnhanced * clip_ratio;
 
-    cv::min(detailEnhanced, cfg.detailClip, detailClipped);
-    cv::max(detailClipped, -cfg.detailClip, detailClipped);
+	imwrite_mdy_private_normalization_8u(detailClipped, "Enhanced_Layer");
 
     cv::Mat reconstructed = baseCompressed + detailClipped;
 
