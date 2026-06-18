@@ -1000,6 +1000,15 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
 int test_DDE_improve()
 {
+    std::array<uchar, 256> jungle_lut{};
+    std::array<uchar, 256> bird_lut{};
+
+	for (int i = 0; i < 256; i++)
+	{
+		jungle_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 0.4) * 255.0));
+		bird_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 0.75) * 255.0));
+	}
+
     fs::path inputDir(NOISE_IMAGE_DIR);
     //fs::path inputDir(IMAGE_DIR);
 
@@ -1041,6 +1050,17 @@ int test_DDE_improve()
         //dde_gradient(images[i], dst_DDE);
         dde_guided(images[i], dst_DDE);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
+
+        cv::Mat jungle_lut_mat(1, 256, CV_8UC1, jungle_lut.data());
+        cv::Mat bird_lut_mat(1, 256, CV_8UC1, bird_lut.data());
+
+        cv::Mat jungle_result, bird_result;
+
+        cv::LUT(dst_DDE, jungle_lut_mat, jungle_result);
+        cv::LUT(dst_DDE, bird_lut_mat, bird_result);
+
+		imwrite_mdy_private(jungle_result, "DDE_jungle");
+		imwrite_mdy_private(bird_result, "DDE_bird");
     }
 
     return 0;
