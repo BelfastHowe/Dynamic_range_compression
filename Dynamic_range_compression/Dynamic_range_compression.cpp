@@ -218,8 +218,9 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
 int rgb2png()
 {
     //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_15-46-24";
-    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-05-11_18-49-38";
-    std::string outputDir = "C:/Users/Belfast/Desktop/result";
+    //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-05-11_18-49-38";
+    std::string inputDir = "C:/Users/13012/RunboIR_Archive/2026-07-06_16-54-24";
+    std::string outputDir = "C:/Users/13012/Desktop/result";
 
     if (!fs::exists(outputDir)) {
         fs::create_directory(outputDir);
@@ -1083,6 +1084,139 @@ int Test_all_methods()
     return 0;
 }
 
+int mean_2sigma_from_folder()
+{
+    struct SigmaReport
+    {
+        // 时域统计（逐像素，反映噪声）
+        double temporal_sigma_mean; // 所有像素时域 σ 的均值
+        double temporal_sigma_max;  // 最大时域 σ（最不稳定的像素）
+        double temporal_sigma_min;  // 最小时域 σ
+
+        // 空域统计（逐帧，反映对比度）
+        double spatial_sigma_mean;  // 所有帧空域 σ 的均值
+        double spatial_sigma_max;   // 最大空域 σ（对比度最高的帧）
+        double spatial_sigma_min;   // 最小空域 σ
+
+        int    frame_count;
+    };
+
+    fs::path inputDir("C:/Users/13012/Desktop/result");
+
+    if (!fs::exists(inputDir))
+    {
+        std::cerr << "Input directory not found: " << "C:/Users/13012/Desktop/result" << std::endl;
+        return -1;
+    }
+
+    std::vector<cv::Mat> images;
+    for (const auto& entry : fs::directory_iterator(inputDir))
+    {
+        // 过滤 png 文件
+        if (!entry.is_regular_file() || entry.path().extension() != ".png")
+            continue;
+
+        cv::Mat src = cv::imread(entry.path().string(), cv::IMREAD_UNCHANGED);
+        if (src.empty())
+        {
+            std::cerr << "Failed to read: " << entry.path() << std::endl;
+            continue;
+        }
+
+        // 处理图像
+        CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+        images.push_back(src);
+    }
+
+    // 读取第一帧获取尺寸
+    cv::Mat first = images[0];
+    CV_Assert(!first.empty() && first.type() == CV_16UC1);
+    const int rows = first.rows;
+    const int cols = first.cols;
+    const int N = static_cast<int>(images.size());
+
+    // 时域统计用的累加器
+    cv::Mat sum(rows, cols, CV_64FC1, cv::Scalar(0));
+    cv::Mat sum2(rows, cols, CV_64FC1, cv::Scalar(0));
+
+    // 空域统计
+    double spatial_sum = 0;
+    double spatial_max = 0;
+    double spatial_min = std::numeric_limits<double>::max();
+    int    count = 0;
+
+    for (const auto& frame : images)
+    {
+        // 空域统计：整帧 mean/stddev
+        cv::Scalar mean, stddev;
+        cv::meanStdDev(frame, mean, stddev);
+        spatial_sum += stddev[0];
+        spatial_max = std::max(spatial_max, stddev[0]);
+        spatial_min = std::min(spatial_min, stddev[0]);
+
+        // 时域统计：逐像素累加
+        for (int r = 0; r < rows; ++r)
+        {
+            const uint16_t* pf = frame.ptr<uint16_t>(r);
+            double* ps = sum.ptr<double>(r);
+            double* ps2 = sum2.ptr<double>(r);
+            for (int c = 0; c < cols; ++c)
+            {
+                double v = pf[c];
+                ps[c] += v;
+                ps2[c] += v * v;
+            }
+        }
+
+        count++;
+    }
+
+    CV_Assert(count > 0);
+
+    // 计算时域 σ
+    double temporal_sum = 0;
+    double temporal_max = 0;
+    double temporal_min = std::numeric_limits<double>::max();
+
+    for (int r = 0; r < rows; ++r)
+    {
+        const double* ps = sum.ptr<double>(r);
+        const double* ps2 = sum2.ptr<double>(r);
+        for (int c = 0; c < cols; ++c)
+        {
+            double mean_v = ps[c] / count;
+            double var = ps2[c] / count - mean_v * mean_v;
+            double sigma = std::sqrt(std::max(var, 0.0));
+            temporal_sum += sigma;
+            temporal_max = std::max(temporal_max, sigma);
+            temporal_min = std::min(temporal_min, sigma);
+        }
+    }
+
+    SigmaReport rpt{};
+    rpt.frame_count = count;
+    rpt.temporal_sigma_mean = temporal_sum / (rows * cols);
+    rpt.temporal_sigma_max = temporal_max;
+    rpt.temporal_sigma_min = temporal_min;
+    rpt.spatial_sigma_mean = spatial_sum / count;
+    rpt.spatial_sigma_max = spatial_max;
+    rpt.spatial_sigma_min = spatial_min;
+
+    printf("=== Sigma 分析报告 ===\n");
+    printf("有效帧数              : %d\n", rpt.frame_count);
+    printf("--- 时域（噪声）---\n");
+    printf("  均值 σ              : %.4f DN\n", rpt.temporal_sigma_mean);
+    printf("  最大 σ              : %.4f DN\n", rpt.temporal_sigma_max);
+    printf("  最小 σ              : %.4f DN\n", rpt.temporal_sigma_min);
+    printf("--- 空域（对比度）---\n");
+    printf("  均值 σ              : %.4f DN\n", rpt.spatial_sigma_mean);
+    printf("  最大 σ              : %.4f DN\n", rpt.spatial_sigma_max);
+    printf("  最小 σ              : %.4f DN\n", rpt.spatial_sigma_min);
+
+    return 0;
+}
+
 int main()
 {
     //Test_all_methods();
@@ -1092,8 +1226,9 @@ int main()
 
     //test_precision_batch_14to8();
     //rgb2png();
+    mean_2sigma_from_folder();
 
-    DDE_improvement();
+    //DDE_improvement();
 
     return 0;
 }
