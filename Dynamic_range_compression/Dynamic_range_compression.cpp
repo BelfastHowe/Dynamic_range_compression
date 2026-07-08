@@ -218,7 +218,7 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
 int rgb2png()
 {
     //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_15-46-24";
-    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-05-11_18-49-38";
+    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/去噪前数据集";
     std::string outputDir = "C:/Users/Belfast/Desktop/result";
 
     if (!fs::exists(outputDir)) {
@@ -907,8 +907,11 @@ int ir_pipeline_cv(cv::InputArray input,
 
 int Test_single_method()
 {
+    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/self_png";
+    fs::path inputDir(self_png);
+
     //fs::path inputDir(IMAGE_DIR);
-    fs::path inputDir(NOISE_IMAGE_DIR);
+    //fs::path inputDir(NOISE_IMAGE_DIR);
     
     if (!fs::exists(inputDir))
     {
@@ -1090,10 +1093,10 @@ int main()
 
     //benchmark_main();
 
-    //test_precision_batch_14to8();
+    test_precision_batch_14to8();
     //rgb2png();
 
-    DDE_improvement();
+    //DDE_improvement();
 
     return 0;
 }

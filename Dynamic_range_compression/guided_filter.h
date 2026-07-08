@@ -21,4 +21,13 @@ public:
 
 cv::Ptr<GuidedFilter> createGuidedFilter(cv::InputArray guide, int radius, double eps, double scale = 1.0);
 
+void guidedFilter(cv::InputArray guide, cv::InputArray src, cv::OutputArray dst, int radius, double eps, int dDepth = -1, double scale = 1.0);
+
+int selfGuidedFilter(cv::InputArray input, cv::OutputArray output, int radius, double eps);
+
+int sgf_cmodel(cv::InputArray  input,
+    cv::OutputArray output,
+    int             radius,
+    int64_t         eps);
+
 

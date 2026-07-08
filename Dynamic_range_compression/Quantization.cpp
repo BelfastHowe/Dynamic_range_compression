@@ -1,5 +1,6 @@
 ﻿#include "Quantization.h"
 #include <atomic>
+#include "guided_filter.h"
 
 
 #define USE_CV_FILTER 1
@@ -1180,16 +1181,30 @@ PrecisionReport test_precision_14to8(
     cv::Mat img14bit = input.getMat();
     CV_CheckTypeEQ(img14bit.type(), CV_16UC1, "");
 
+    cv::Mat img_32F;
+    img14bit.convertTo(img_32F, CV_32F);
+
     // 浮点参考版本
     cv::Mat ref_out;
-    clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
+    //clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
     //single_scale_retinex(img14bit, ref_out, 50);
+    //guidedFilter(img_32F, img_32F, ref_out, 3, 500);
+    selfGuidedFilter(img_32F, ref_out, 3, 500);
+	ref_out.convertTo(ref_out, CV_16UC1);
 
     // 定点量化版本
     cv::Mat fixed_out;
-    clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
+    //clahe_fixed_mapping(img14bit, fixed_out, clipLimit, tileSize);
     //cv::Ptr<SSR_Fixed> ssr = cv::makePtr<SSR_Fixed>(16, 24, 16, 50);
 	//ssr->apply(img14bit, fixed_out);
+    //selfGuidedFilter(img_32F, fixed_out, 3, 500);
+	sgf_cmodel(img14bit, fixed_out, 3, 500);
+
+    cv::Mat diff_32F;
+	cv::absdiff(ref_out, fixed_out, diff_32F);
+	double minVal, maxVal;
+	cv::minMaxLoc(diff_32F, &minVal, &maxVal);
+	std::cout << "diff_32F: minMax=" << minVal << " // " << maxVal << std::endl;
 
     //8bit
     CV_Assert(ref_out.size() == fixed_out.size());
@@ -1201,27 +1216,51 @@ PrecisionReport test_precision_14to8(
     PrecisionReport rpt{};
     double sse = 0;
     double sum_err = 0;
-    const double MAX_VAL = 255.0; // CLAHE 输出归一化到 8bit 等效范围
-
+    double MAX_VAL = 0.0;
     cv::Mat residual_map(ref_out.size(), CV_8UC1);
 
-    for (int r = 0; r < ref_out.rows; ++r)
+	if (ref_out.type() == CV_8UC1)
     {
-        const auto* pref = ref_out.ptr<uint8_t>(r);
-        const auto* pfixed = fixed_out.ptr<uint8_t>(r);
-        uint8_t* pres = residual_map.ptr<uint8_t>(r);
-        for (int c = 0; c < ref_out.cols; ++c)
+        MAX_VAL = 255.0; // CLAHE 输出归一化到 8bit 等效范围
+
+        for (int r = 0; r < ref_out.rows; ++r)
         {
-            int err = std::abs(cv::saturate_cast<int>(pref[c]) - cv::saturate_cast<int>(pfixed[c]));
-            rpt.max_abs_err = std::max(rpt.max_abs_err, err);
+            const auto* pref = ref_out.ptr<uint8_t>(r);
+            const auto* pfixed = fixed_out.ptr<uint8_t>(r);
+            uint8_t* pres = residual_map.ptr<uint8_t>(r);
+            for (int c = 0; c < ref_out.cols; ++c)
+            {
+                int err = std::abs(cv::saturate_cast<int>(pref[c]) - cv::saturate_cast<int>(pfixed[c]));
+                rpt.max_abs_err = std::max(rpt.max_abs_err, err);
 
-            if (err > 1) rpt.over_1lsb++;
+                if (err > 1) rpt.over_1lsb++;
 
-            sum_err += err;
-            sse += cv::saturate_cast<double>(err) * cv::saturate_cast<double>(err);
+                sum_err += err;
+                sse += cv::saturate_cast<double>(err) * cv::saturate_cast<double>(err);
 
-            pres[c] = cv::saturate_cast<uint8_t>(err);
+                pres[c] = cv::saturate_cast<uint8_t>(err);
+            }
         }
+    }
+    else
+    {
+		MAX_VAL = 16383.0;
+		residual_map.convertTo(residual_map, CV_16UC1);
+		for (int r = 0; r < ref_out.rows; ++r)
+		{
+			const auto* pref = ref_out.ptr<uint16_t>(r);
+			const auto* pfixed = fixed_out.ptr<uint16_t>(r);
+			uint16_t* pres = residual_map.ptr<uint16_t>(r);
+			for (int c = 0; c < ref_out.cols; ++c)
+			{
+				int err = std::abs(cv::saturate_cast<int>(pref[c]) - cv::saturate_cast<int>(pfixed[c]));
+				rpt.max_abs_err = std::max(rpt.max_abs_err, err);
+				if (err > 1) rpt.over_1lsb++;
+				sum_err += err;
+				sse += cv::saturate_cast<double>(err) * cv::saturate_cast<double>(err);
+				pres[c] = cv::saturate_cast<uint16_t>(err);
+			}
+		}
     }
 
     double mse = sse / n;
@@ -1243,9 +1282,9 @@ PrecisionReport test_precision_14to8(
         rpt.over_1lsb, n, rpt.over_1lsb_pct);
 
     cv::Mat residual_norm;
-    cv::normalize(residual_map, residual_norm, 0, 255, cv::NORM_MINMAX);
-    imwrite_mdy_private(fixed_out, "fixed_out");
-    imwrite_mdy_private(ref_out, "ref_out");
+    cv::normalize(residual_map, residual_norm, 0, 255, cv::NORM_MINMAX, CV_8U);
+    imwrite_mdy_private_normalization_8u(fixed_out, "fixed_out");
+    imwrite_mdy_private_normalization_8u(ref_out, "ref_out");
     imwrite_mdy_private(residual_norm, "residual_map.png");
 
     return rpt;

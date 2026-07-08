@@ -1,4 +1,5 @@
 ﻿#include "DDE_improvement.h"
+#include "guided_filter.h"
 
 
 namespace fs = std::filesystem;
@@ -988,9 +989,12 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     cv::Mat reconstructed = baseCompressed + detailClipped;
 
+    //percentile_truncation_32F(reconstructed, reconstructed, cfg.lowPct, cfg.highPct);
+
     cv::Mat dst;
     cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
     //percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
+	cv::equalizeHist(dst, dst);
 
     output.assign(dst);
 
@@ -1009,6 +1013,8 @@ int test_DDE_improve()
 		bird_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 0.75) * 255.0));
 	}
 
+    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/self_png";
+	//fs::path inputDir(self_png);
     fs::path inputDir(NOISE_IMAGE_DIR);
     //fs::path inputDir(IMAGE_DIR);
 

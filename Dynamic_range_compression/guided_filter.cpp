@@ -581,6 +581,7 @@ private: /*Parallel body classes*/
 
     struct ApplyTransform_ParBody : public cv::ParallelLoopBody
     {
+		// 执行最终的线性组合变换 q = sum(alpha * guideCn) + beta
         GuidedFilterImpl& gf;
         std::vector<std::vector<cv::Mat> >& alpha;
         std::vector<cv::Mat>& beta;
@@ -861,6 +862,31 @@ void GuidedFilterImpl::ComputeBeta_ParBody::operator()(const cv::Range& range) c
     }
 }
 
+void GuidedFilterImpl::ApplyTransform_ParBody::operator()(const cv::Range& range) const
+{
+    int srcCnNum = (int)alpha.size();
+
+    for (int i = range.start; i < range.end; i++)
+    {
+        float* _g[4];
+        for (int gi = 0; gi < gf.gCnNum; gi++)
+            _g[gi] = gf.guideCnOriginal[gi].ptr<float>(i);
+
+        float* betaDst, * g, * a;
+        for (int si = 0; si < srcCnNum; si++)
+        {
+            betaDst = beta[si].ptr<float>(i);
+            for (int gi = 0; gi < gf.gCnNum; gi++)
+            {
+                a = alpha[si][gi].ptr<float>(i);
+                g = _g[gi];
+
+                add_mul(betaDst, a, g, gf.wOriginal);
+            }
+        }
+    }
+}
+
 GuidedFilterImpl::GFTransform_ParBody::GFTransform_ParBody(GuidedFilterImpl& gf_, std::vector<cv::Mat>& srcv, std::vector<cv::Mat>& dstv, TransformFunc func_)
     : gf(gf_), func(func_)
 {
@@ -969,7 +995,7 @@ void GuidedFilterImpl::init(cv::InputArray guide, int radius_, double eps_, doub
     guideCnMean.resize(gCnNum);
     parMeanFilter(guideCn, guideCnMean);
 
-	// 计算引导图像各通道的协方差矩阵
+	// 计算引导图像各通道的协方差矩阵，并在对角线上加上 eps
     SymArray2D<cv::Mat> covars;
     computeCovGuide(covars);
 	// 计算协方差矩阵的逆矩阵
@@ -1084,3 +1110,187 @@ void guidedFilter(cv::InputArray guide, cv::InputArray src, cv::OutputArray dst,
     cv::Ptr<GuidedFilter> gf = createGuidedFilter(guide, radius, eps, scale);
     gf->filter(src, dst, dDepth);
 }
+
+
+/*---------------------------------------精简的浮点引导滤波-----------------------------------------------*/
+
+int selfGuidedFilter(cv::InputArray input, cv::OutputArray output, int radius, double eps)
+{
+	cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_32FC1, "");
+
+    cv::Size winSize(2 * radius + 1, 2 * radius + 1);
+
+    auto mean_Filter = [&](const cv::Mat& input, cv::Mat& output)
+        {
+        cv::boxFilter(input, output, CV_32F, winSize, cv::Point(-1, -1), true, cv::BORDER_REFLECT);
+        };
+
+    cv::Mat mean_I;
+    mean_Filter(src, mean_I);
+
+    cv::Mat mean_II;
+    mean_Filter(src.mul(src), mean_II);
+
+    cv::Mat var_I = mean_II - mean_I.mul(mean_I);
+
+    cv::Mat a = var_I / (var_I + eps);
+
+    cv::Mat b = mean_I - a.mul(mean_I);
+
+    cv::Mat mean_a, mean_b;
+    mean_Filter(a, mean_a);
+    mean_Filter(b, mean_b);
+
+    cv::Mat dst;
+    dst = mean_a.mul(src) + mean_b;
+    
+	output.assign(dst);
+    return 0;
+}
+
+
+/*-------------------------------------------------定点化----------------------------------------------*/
+static constexpr int FRAC_BITS = 8;   // fractional bits for mean / var
+static constexpr int A_FRAC = FRAC_BITS * 2;  // fractional bits for a and b
+static constexpr int INV_N_FRAC = 24;   // fractional bits for 1/N reciprocal
+static constexpr int B_STORE_SHIFT = A_FRAC - FRAC_BITS;
+
+int sgf_cmodel(cv::InputArray  input,
+    cv::OutputArray output,
+    int             radius,
+    int64_t         eps)
+{
+    const cv::Mat src = input.getMat();
+    CV_Assert(src.type() == CV_16UC1);
+    CV_Assert(radius > 0);
+    CV_Assert(eps > 0);
+
+    const int H = src.rows;
+    const int W = src.cols;
+    const int r = radius;
+    const int pad = 2 * r;
+
+    // eps scaled to the same Q-domain as var_I
+    const int64_t eps_q = eps << FRAC_BITS;
+
+    // Window size (constant across all interior pixels after padding)
+    const int64_t N = static_cast<int64_t>(2 * r + 1) * (2 * r + 1);
+    const uint32_t inv_N_q = static_cast<uint32_t>(
+        std::llround(static_cast<double>(INT64_C(1) << INV_N_FRAC)
+            / static_cast<double>(N)));   // 19bit
+
+    cv::Mat P;
+    cv::copyMakeBorder(src, P, pad, pad, pad, pad, cv::BORDER_REFLECT);
+
+    cv::Mat mat_a(H, W, CV_32SC1);   // a_q    in U0.A_FRAC
+    cv::Mat mat_b(H, W, CV_32SC1);   // b_q >> B_STORE_SHIFT
+
+    for (int y = 0; y < H; ++y)
+    {
+        int32_t* pa = mat_a.ptr<int32_t>(y);
+        int32_t* pb = mat_b.ptr<int32_t>(y);
+
+        for (int x = 0; x < W; ++x)
+        {
+            const int cy = y + pad;
+            const int cx = x + pad;
+
+            int64_t sum_I = 0; // 14+6bit   20
+            int64_t sum_I2 = 0; // 14+14+6bit   34
+
+            for (int dy = -r; dy <= r; ++dy)
+            {
+                const uint16_t* row = P.ptr<uint16_t>(cy + dy);
+                for (int dx = -r; dx <= r; ++dx)
+                {
+                    const int64_t v = row[cx + dx]; //14bit
+                    sum_I += v;
+                    sum_I2 += v * v;
+                }
+            }
+
+            // mean_I, mean_I2  in Q = FRAC_BITS
+            const int64_t mean_I = ((sum_I << FRAC_BITS) * inv_N_q) >> INV_N_FRAC; // max 20+19+8  in fact 20-5+8=23bit
+            const int64_t mean_I2 = ((sum_I2 << FRAC_BITS) * inv_N_q) >> INV_N_FRAC; // max 34+19+8 34-5+8=37bit
+
+            // var_I = E[I²] - E[I]²,  Q = FRAC_BITS
+            const int64_t mean_I_sq = (mean_I * mean_I) >> FRAC_BITS; // 23+23-8=38bit
+            int64_t var_I = mean_I2 - mean_I_sq;
+            if (var_I < 0) var_I = 0;                           // clamp
+
+            // a = var / (var + eps),  result in U0.A_FRAC
+            const int64_t denom = var_I + eps_q;
+            int64_t a = (var_I << A_FRAC) / denom; // 16bit
+            if (a > (INT64_C(1) << A_FRAC)) a = INT64_C(1) << A_FRAC;
+            if (a < 0)                       a = 0;
+
+            // b = (1 - a) * mean_I  in U16.A_FRAC
+            const int64_t one_minus_a = (INT64_C(1) << A_FRAC) - a;
+            int64_t b = (one_minus_a * mean_I) >> FRAC_BITS;   // U16.A_FRAC
+
+            pa[x] = static_cast<int32_t>(a);
+            pb[x] = static_cast<int32_t>(b >> B_STORE_SHIFT);  // U16.FRAC_BITS
+        }
+    }
+
+    cv::Mat Pa, Pb;
+    cv::copyMakeBorder(mat_a, Pa, pad, pad, pad, pad, cv::BORDER_REFLECT);
+    cv::copyMakeBorder(mat_b, Pb, pad, pad, pad, pad, cv::BORDER_REFLECT);
+
+    cv::Mat dst(H, W, CV_16UC1);
+
+    for (int y = 0; y < H; ++y)
+    {
+        const uint16_t* ps = src.ptr<uint16_t>(y);
+        uint16_t* pd = dst.ptr<uint16_t>(y);
+
+        for (int x = 0; x < W; ++x)
+        {
+            const int cy = y + pad;
+            const int cx = x + pad;
+
+            int64_t sum_a = 0;
+            int64_t sum_b = 0;
+
+            for (int dy = -r; dy <= r; ++dy)
+            {
+                const int32_t* ra = Pa.ptr<int32_t>(cy + dy);
+                const int32_t* rb = Pb.ptr<int32_t>(cy + dy);
+                for (int dx = -r; dx <= r; ++dx)
+                {
+                    sum_a += ra[cx + dx];
+                    sum_b += rb[cx + dx];
+                }
+            }
+
+            // mean_a: U0.A_FRAC
+            // mean_b: U16.FRAC_BITS
+            const int64_t mean_a = (sum_a * inv_N_q) >> INV_N_FRAC;
+            const int64_t mean_b = (sum_b * inv_N_q) >> INV_N_FRAC;
+
+            // q = mean_a * I + mean_b
+            // mean_a * I : U0.A_FRAC × U16.0  = U16.A_FRAC,  >> A_FRAC → U16.0
+            // mean_b     : U16.FRAC_BITS,       >> FRAC_BITS  → U16.0
+            const int64_t I_val = static_cast<int64_t>(ps[x]);
+            int64_t q = ((mean_a * I_val) >> A_FRAC) + (mean_b >> FRAC_BITS);
+
+            if (q > 16383)
+            {
+				std::cout << "q > 16383, q = " << q << std::endl;
+                q = 16383;
+            }
+            if (q < 0)
+            {
+				std::cout << "q < 0, q = " << q << std::endl;
+                q = 0;
+            }
+
+            pd[x] = static_cast<uint16_t>(q);
+        }
+    }
+
+    output.assign(dst);
+    return 0;
+}
+
