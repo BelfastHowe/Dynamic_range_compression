@@ -1,6 +1,7 @@
 ﻿#include "Quantization.h"
 #include <atomic>
 #include "guided_filter.h"
+#include "DDE_improvement.h"
 
 
 #define USE_CV_FILTER 1
@@ -1189,8 +1190,15 @@ PrecisionReport test_precision_14to8(
     //clahe_mapping(img14bit, ref_out, cv::saturate_cast<double>(clipLimit), tileSize);
     //single_scale_retinex(img14bit, ref_out, 50);
     //guidedFilter(img_32F, img_32F, ref_out, 3, 500);
-    selfGuidedFilter(img_32F, ref_out, 3, 500);
-	ref_out.convertTo(ref_out, CV_16UC1);
+
+    //selfGuidedFilter(img_32F, ref_out, 3, 500);
+	//ref_out.convertTo(ref_out, CV_16UC1);
+
+    //sgf_cmodel_all(img14bit, ref_out, 3, 500);
+	calc_Gradient_32F(img_32F, ref_out);
+    cv::threshold(ref_out, ref_out, 120.0, 16383.0, cv::THRESH_BINARY);
+    ref_out.convertTo(ref_out, CV_16UC1);
+
 
     // 定点量化版本
     cv::Mat fixed_out;
@@ -1198,7 +1206,8 @@ PrecisionReport test_precision_14to8(
     //cv::Ptr<SSR_Fixed> ssr = cv::makePtr<SSR_Fixed>(16, 24, 16, 50);
 	//ssr->apply(img14bit, fixed_out);
     //selfGuidedFilter(img_32F, fixed_out, 3, 500);
-	sgf_cmodel(img14bit, fixed_out, 3, 500);
+	//sgf_cmodel_vector(img14bit, fixed_out, 3, 500);
+	calc_gradient_threshold_cmodel(img14bit, fixed_out, 120);
 
     cv::Mat diff_32F;
 	cv::absdiff(ref_out, fixed_out, diff_32F);

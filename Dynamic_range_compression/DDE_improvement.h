@@ -5,3 +5,5 @@
 
 int DDE_improvement();
 
+int calc_Gradient_32F(cv::InputArray src, cv::OutputArray output);
+

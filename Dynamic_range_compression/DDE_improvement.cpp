@@ -949,7 +949,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
 
-    percentile_truncation_32F(img_norm, img_norm, cfg.lowPct, cfg.highPct);
+    //percentile_truncation_32F(img_norm, img_norm, cfg.lowPct, cfg.highPct);
 
     cv::Mat baseLayer;
     cv::ximgproc::guidedFilter(img_norm, img_norm, baseLayer, cfg.radius, cfg.eps);
@@ -992,9 +992,11 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
     //percentile_truncation_32F(reconstructed, reconstructed, cfg.lowPct, cfg.highPct);
 
     cv::Mat dst;
-    cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
+    //cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
     //percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
-	cv::equalizeHist(dst, dst);
+	//cv::equalizeHist(dst, dst);
+	reconstructed.convertTo(reconstructed, CV_16U);
+    plateauHE_14bit_to_8bit(reconstructed, dst, 2.0);
 
     output.assign(dst);
 

@@ -1294,3 +1294,321 @@ int sgf_cmodel(cv::InputArray  input,
     return 0;
 }
 
+int sgf_cmodel_all(cv::InputArray  input,
+    cv::OutputArray output,
+    int             radius,
+    int64_t         eps)
+{
+    const cv::Mat src = input.getMat();
+    CV_Assert(src.type() == CV_16UC1);
+    CV_Assert(radius > 0);
+    CV_Assert(eps > 0);
+
+    const int H = src.rows;
+    const int W = src.cols;
+    const int r = radius;
+    const int pad = 2 * r;
+
+    // ── Precompute 1/N 
+    const int64_t  N = static_cast<int64_t>(2 * r + 1) * (2 * r + 1);
+    const uint32_t inv_N_q = static_cast<uint32_t>(
+        std::llround(static_cast<double>(INT64_C(1) << INV_N_FRAC) / static_cast<double>(N)));
+
+    const int64_t eps_q = eps << FRAC_BITS;
+
+    cv::Mat P;
+    cv::copyMakeBorder(src, P, pad, pad, pad, pad, cv::BORDER_REFLECT);
+
+    cv::Mat dst(H, W, CV_16UC1);
+
+    for (int y = 0; y < H; ++y)
+    {
+        const uint16_t* ps = src.ptr<uint16_t>(y);
+        uint16_t* pd = dst.ptr<uint16_t>(y);
+
+        for (int x = 0; x < W; ++x)
+        {
+            const int cy = y + pad;   // = y + 2r
+            const int cx = x + pad;   // = x + 2r
+
+            int64_t sum_a = 0;
+            int64_t sum_b = 0;
+
+            for (int dy = -r; dy <= r; ++dy)
+            {
+                for (int dx = -r; dx <= r; ++dx)
+                {
+                    const int scy = cy + dy;
+                    const int scx = cx + dx;
+
+                    int64_t sum_I = 0;
+                    int64_t sum_I2 = 0;
+
+                    for (int ky = -r; ky <= r; ++ky)
+                    {
+                        const uint16_t* row = P.ptr<uint16_t>(scy + ky);
+                        for (int kx = -r; kx <= r; ++kx)
+                        {
+                            const int64_t v = row[scx + kx];
+                            sum_I += v;
+                            sum_I2 += v * v;
+                        }
+                    }
+
+                    // mean_I, mean_I2  in Q = FRAC_BITS
+                    const int64_t mean_I = (sum_I << FRAC_BITS) * inv_N_q >> INV_N_FRAC;
+                    const int64_t mean_I2 = (sum_I2 << FRAC_BITS) * inv_N_q >> INV_N_FRAC;
+
+                    // var_I  in Q = FRAC_BITS,  clamped >= 0
+                    const int64_t mean_I_sq = (mean_I * mean_I) >> FRAC_BITS;
+                    int64_t var_I = mean_I2 - mean_I_sq;
+                    if (var_I < 0) var_I = 0;
+
+                    // a  in U0.A_FRAC
+                    const int64_t denom = var_I + eps_q;
+                    int64_t a = (var_I << A_FRAC) / denom;
+                    if (a > (INT64_C(1) << A_FRAC)) a = INT64_C(1) << A_FRAC;
+                    if (a < 0)                       a = 0;
+
+                    // b = (1 - a) * mean_I  in U16.A_FRAC
+                    const int64_t one_minus_a = (INT64_C(1) << A_FRAC) - a;
+                    const int64_t b = (one_minus_a * mean_I) >> FRAC_BITS;
+
+                    sum_a += a;
+                    sum_b += b;
+                }
+            }
+
+            const int64_t mean_a = sum_a * inv_N_q >> INV_N_FRAC;  // U0.A_FRAC
+            const int64_t mean_b = sum_b * inv_N_q >> INV_N_FRAC;  // U16.A_FRAC
+
+            // ── Reconstruct q ────────────────────────────────────────────────
+            // mean_a * I : U0.A_FRAC × U16.0,  >> A_FRAC → U16.0
+            // mean_b     : U16.A_FRAC,          >> A_FRAC → U16.0
+            const int64_t I_val = static_cast<int64_t>(ps[x]);
+            int64_t q = ((mean_a * I_val) + mean_b) >> A_FRAC;
+
+            if (q > 65535) q = 65535;
+            if (q < 0)     q = 0;
+
+            pd[x] = static_cast<uint16_t>(q);
+        }
+    }
+
+    output.assign(dst);
+    return 0;
+}
+
+static inline void compute_ab(const cv::Mat& P,
+    int scy, int scx, int r,
+    uint32_t inv_N_q, int64_t eps_q,
+    int64_t& a_out, int64_t& b_out)
+{
+    int64_t sum_I = 0;
+    int64_t sum_I2 = 0;
+
+    for (int ky = -r; ky <= r; ++ky)
+    {
+        const uint16_t* row = P.ptr<uint16_t>(scy + ky);
+        for (int kx = -r; kx <= r; ++kx)
+        {
+            const int64_t v = row[scx + kx];
+            sum_I += v;
+            sum_I2 += v * v;
+        }
+    }
+
+    // mean_I, mean_I2  in Q = FRAC_BITS
+    const int64_t mean_I = (sum_I << FRAC_BITS) * inv_N_q >> INV_N_FRAC;
+    const int64_t mean_I2 = (sum_I2 << FRAC_BITS) * inv_N_q >> INV_N_FRAC;
+
+    // var_I  in Q = FRAC_BITS,  clamped >= 0
+    const int64_t mean_I_sq = (mean_I * mean_I) >> FRAC_BITS;
+    int64_t var_I = mean_I2 - mean_I_sq;
+    if (var_I < 0) var_I = 0;
+
+    // a  in U0.A_FRAC
+    const int64_t denom = var_I + eps_q;
+    int64_t a = (var_I << A_FRAC) / denom;
+    if (a > (INT64_C(1) << A_FRAC)) a = INT64_C(1) << A_FRAC;
+    if (a < 0)                       a = 0;
+
+    // b = (1 - a) * mean_I  in U16.A_FRAC
+    const int64_t one_minus_a = (INT64_C(1) << A_FRAC) - a;
+    const int64_t b = (one_minus_a * mean_I) >> FRAC_BITS;
+
+    a_out = a;
+    b_out = b;
+}
+
+int sgf_cmodel_vector(cv::InputArray  input,
+    cv::OutputArray output,
+    int             radius,
+    int64_t         eps)
+{
+    const cv::Mat src = input.getMat();
+    CV_Assert(src.type() == CV_16UC1);
+    CV_Assert(radius > 0);
+    CV_Assert(eps > 0);
+
+    const int H = src.rows;
+    const int W = src.cols;
+    const int r = radius;
+    const int pad = 2 * r;
+    const int win = 2 * r + 1;   // sub-window side length
+
+    const int64_t  N = static_cast<int64_t>(win) * win;
+    const uint32_t inv_N_q = static_cast<uint32_t>(
+        std::llround(static_cast<double>(INT64_C(1) << INV_N_FRAC) / static_cast<double>(N)));
+    const int64_t eps_q = eps << FRAC_BITS;
+
+    cv::Mat P;
+    cv::copyMakeBorder(src, P, pad, pad, pad, pad, cv::BORDER_REFLECT);
+
+    std::vector<int64_t> col_sum_a(win, 0);
+    std::vector<int64_t> col_sum_b(win, 0);
+
+    cv::Mat dst(H, W, CV_16UC1);
+
+    for (int y = 0; y < H; ++y)
+    {
+        const uint16_t* ps = src.ptr<uint16_t>(y);
+        uint16_t* pd = dst.ptr<uint16_t>(y);
+
+        const int cy = y + pad;
+
+        int64_t sum_a = 0;
+        int64_t sum_b = 0;
+
+        for (int slot = 0; slot < win; ++slot)
+        {
+            col_sum_a[slot] = 0;
+            col_sum_b[slot] = 0;
+
+            const int scx = r + slot;   // P-column of this sub-centre at x=0
+
+            for (int dy = -r; dy <= r; ++dy)
+            {
+                int64_t a, b;
+                compute_ab(P, cy + dy, scx, r, inv_N_q, eps_q, a, b);
+                col_sum_a[slot] += a;
+                col_sum_b[slot] += b;
+            }
+
+            sum_a += col_sum_a[slot];
+            sum_b += col_sum_b[slot];
+        }
+
+        for (int x = 0; x < W; ++x)
+        {
+            if (x > 0)
+            {
+                const int slot = (x - 1) % win;
+                const int new_scx = x + 3 * r;
+
+                sum_a -= col_sum_a[slot];
+                sum_b -= col_sum_b[slot];
+
+                col_sum_a[slot] = 0;
+                col_sum_b[slot] = 0;
+
+                for (int dy = -r; dy <= r; ++dy)
+                {
+                    int64_t a, b;
+                    compute_ab(P, cy + dy, new_scx, r, inv_N_q, eps_q, a, b);
+                    col_sum_a[slot] += a;
+                    col_sum_b[slot] += b;
+                }
+
+                sum_a += col_sum_a[slot];
+                sum_b += col_sum_b[slot];
+            }
+
+            const int64_t mean_a = sum_a * inv_N_q >> INV_N_FRAC;  // U0.A_FRAC
+            const int64_t mean_b = sum_b * inv_N_q >> INV_N_FRAC;  // U16.A_FRAC
+
+            const int64_t I_val = static_cast<int64_t>(ps[x]);
+            int64_t q = ((mean_a * I_val) + mean_b) >> A_FRAC;
+
+            if (q > 65535) q = 65535;
+            if (q < 0)     q = 0;
+
+            pd[x] = static_cast<uint16_t>(q);
+        }
+    }
+
+    output.assign(dst);
+    return 0;
+}
+
+
+/*---------------------------------------定点化求梯度-----------------------------------------------*/
+
+int calc_gradient_threshold_cmodel(cv::InputArray  input,
+    cv::OutputArray output,
+    int32_t         thr,
+    uint16_t        out_val)
+{
+    const cv::Mat src = input.getMat();
+    CV_Assert(src.type() == CV_16UC1);
+    CV_Assert(thr >= 0);
+
+    const int H = src.rows;
+    const int W = src.cols;
+
+    const int64_t thr_sq = static_cast<int64_t>(thr) * thr;
+
+    // Pad by 1 for the 3×3 Scharr kernel, BORDER_REFLECT matches cv::Scharr
+    cv::Mat P;
+    cv::copyMakeBorder(src, P, 1, 1, 1, 1, 4);
+
+    cv::Mat dst = cv::Mat::zeros(H, W, CV_16UC1);
+
+    for (int y = 0; y < H; ++y)
+    {
+        uint16_t* pd = dst.ptr<uint16_t>(y);
+
+        const uint16_t* r0 = P.ptr<uint16_t>(y);  // row y-1 in src
+        const uint16_t* r1 = P.ptr<uint16_t>(y + 1);  // row y   in src
+        const uint16_t* r2 = P.ptr<uint16_t>(y + 2);  // row y+1 in src
+
+        for (int x = 0; x < W; ++x)
+        {
+            const int px = x + 1;
+
+            // ── Scharr X  (S21.0)
+            // -3  0 +3       row y-1
+            // -10 0 +10      row y
+            // -3  0 +3       row y+1
+            const int32_t gx =
+                -3 * static_cast<int32_t>(r0[px - 1])
+                + 3 * static_cast<int32_t>(r0[px + 1])
+                - 10 * static_cast<int32_t>(r1[px - 1])
+                + 10 * static_cast<int32_t>(r1[px + 1])
+                - 3 * static_cast<int32_t>(r2[px - 1])
+                + 3 * static_cast<int32_t>(r2[px + 1]);
+
+            // ── Scharr Y  (S21.0) 
+            // -3 -10 -3      row y-1
+            //  0   0  0      row y
+            // +3 +10 +3      row y+1
+            const int32_t gy =
+                -3 * static_cast<int32_t>(r0[px - 1])
+                - 10 * static_cast<int32_t>(r0[px])
+                - 3 * static_cast<int32_t>(r0[px + 1])
+                + 3 * static_cast<int32_t>(r2[px - 1])
+                + 10 * static_cast<int32_t>(r2[px])
+                + 3 * static_cast<int32_t>(r2[px + 1]);
+
+            const int64_t mag_sq = static_cast<int64_t>(gx) * gx
+                + static_cast<int64_t>(gy) * gy;
+
+            pd[x] = (mag_sq > thr_sq) ? out_val : uint16_t(0);
+        }
+    }
+
+    output.assign(dst);
+    return 0;
+}
+
+

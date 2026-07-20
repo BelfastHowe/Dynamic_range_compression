@@ -26,6 +26,8 @@ int single_scale_retinex(cv::InputArray input, cv::OutputArray output, double si
 // 多尺度Retinex算法实现，输入为单通道16位图像，输出为单通道16位图像，sigmas为高斯模糊的标准差列表
 int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std::vector<double>& sigmas);
 
+int plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double plateauRatio = 1.5);
+
 // 线性映射函数，将输入图像的像素值线性映射到0-255范围，输入为单通道16位图像，输出为单通道8位图像
 int linear_mapping(cv::InputArray input, cv::OutputArray output);
 

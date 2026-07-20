@@ -515,6 +515,79 @@ int equalize_hist_16UC1(cv::InputArray input, cv::OutputArray output, double max
     return 0;
 }
 
+int plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double plateauRatio)
+{
+    const cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    const int HIST_SIZE = 16384;
+    std::vector<int> hist(HIST_SIZE, 0);
+
+    for (int r = 0; r < src.rows; ++r)
+    {
+        const ushort* ptr = src.ptr<ushort>(r);
+        for (int c = 0; c < src.cols; ++c)
+        {
+            ushort val = ptr[c];
+            if (val < HIST_SIZE)
+            {
+                hist[val]++;
+            }
+            else
+            {
+                hist[HIST_SIZE - 1]++;
+            }
+        }
+    }
+
+    double avg_pixels_per_bin = static_cast<double>(src.rows * src.cols) / static_cast<double>(HIST_SIZE);
+    int Tp = static_cast<int>(avg_pixels_per_bin * plateauRatio);
+    Tp = std::max(1, Tp);
+
+    std::vector<int> clipped_hist(HIST_SIZE);
+    for (int i = 0; i < HIST_SIZE; ++i)
+    {
+        clipped_hist[i] = std::min(hist[i], Tp);
+    }
+
+    std::vector<int> cdf(HIST_SIZE, 0);
+    cdf[0] = clipped_hist[0];
+    for (int i = 1; i < HIST_SIZE; ++i)
+    {
+        cdf[i] = cdf[i - 1] + clipped_hist[i];
+    }
+
+    int total_clipped_pixels = cdf[HIST_SIZE - 1];
+    std::vector<uchar> lut(HIST_SIZE, 0);
+    for (int i = 0; i < HIST_SIZE; ++i)
+    {
+        if (total_clipped_pixels > 0)
+        {
+            lut[i] = cv::saturate_cast<uchar>(cvRound(255.0 * cdf[i] / total_clipped_pixels));
+        }
+        else
+        {
+            lut[i] = 0;
+        }
+    }
+
+	cv::Mat dst = cv::Mat::zeros(src.size(), CV_8UC1);
+    for (int r = 0; r < src.rows; ++r)
+    {
+        const auto* src_ptr = src.ptr<ushort>(r);
+        auto* dst_ptr = dst.ptr<uchar>(r);
+        for (int c = 0; c < src.cols; ++c)
+        {
+            ushort val = src_ptr[c];
+            if (val >= HIST_SIZE) val = HIST_SIZE - 1; // 溢出截断
+            dst_ptr[c] = lut[val]; 
+        }
+    }
+
+    output.assign(dst);
+    return 0;
+}
+
 
 int clahe_mapping(cv::InputArray input, cv::OutputArray output, double clipLimit = 128.0, cv::Size tileSize = { 8, 8 })
 {
@@ -1228,11 +1301,11 @@ int main()
 
     //benchmark_main();
 
-    test_precision_batch_14to8();
+    //test_precision_batch_14to8();
     //rgb2png();
-    mean_2sigma_from_folder();
+    //mean_2sigma_from_folder();
 
-    //DDE_improvement();
+    DDE_improvement();
 
     return 0;
 }

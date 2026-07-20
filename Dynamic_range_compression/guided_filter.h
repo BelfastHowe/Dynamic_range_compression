@@ -30,4 +30,19 @@ int sgf_cmodel(cv::InputArray  input,
     int             radius,
     int64_t         eps);
 
+int sgf_cmodel_all(cv::InputArray  input,
+    cv::OutputArray output,
+    int             radius,
+    int64_t         eps);
+
+int sgf_cmodel_vector(cv::InputArray  input,
+    cv::OutputArray output,
+    int             radius,
+    int64_t         eps);
+
+int calc_gradient_threshold_cmodel(cv::InputArray  input,
+    cv::OutputArray output,
+    int32_t         thr,
+    uint16_t        out_val = 16383);
+
 
