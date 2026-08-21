@@ -218,7 +218,7 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
 int rgb2png()
 {
     //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_15-46-24";
-    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-05-11_18-49-38";
+    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/30度黑体2";
     std::string outputDir = "C:/Users/Belfast/Desktop/result";
     //std::string inputDir = "C:/Users/13012/RunboIR_Archive/2026-07-06_16-54-24";
     //std::string outputDir = "C:/Users/13012/Desktop/result";
@@ -364,6 +364,173 @@ int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg)
         cv::FONT_HERSHEY_PLAIN, 0.9, cfg.axisColor, 1);
 
 	imwrite_mdy_private(canvas, "histogram");
+    cv::imshow(cfg.winName, canvas);
+    cv::waitKey(1);
+
+    return 0;
+}
+
+int show_Histogram_from_vector(const std::vector<int>& histData,
+    const HistDisplayConfig& cfg,
+    HistCompressMode mode)
+{
+    if (histData.empty())
+        return -1;
+
+    const int srcBins = static_cast<int>(histData.size());
+    const int dstBins = std::min(cfg.binCount, srcBins);
+
+    std::vector<float> hist(dstBins, 0.f);
+
+    //----------------------------------------
+    // 压缩Histogram
+    //----------------------------------------
+    double step = static_cast<double>(srcBins) / dstBins;
+
+    for (int i = 0; i < dstBins; i++)
+    {
+        int begin = static_cast<int>(i * step);
+        int end = static_cast<int>((i + 1) * step);
+
+        end = std::min(end, srcBins);
+
+        if (begin >= end)
+            continue;
+
+        switch (mode)
+        {
+        case HistCompressMode::SUM:
+        {
+            double sum = 0;
+            for (int j = begin; j < end; j++)
+                sum += histData[j];
+            hist[i] = static_cast<float>(sum);
+            break;
+        }
+
+        case HistCompressMode::MAX:
+        {
+            int vmax = 0;
+            for (int j = begin; j < end; j++)
+                vmax = std::max(vmax, histData[j]);
+            hist[i] = static_cast<float>(vmax);
+            break;
+        }
+
+        case HistCompressMode::MEAN:
+        {
+            double sum = 0;
+            for (int j = begin; j < end; j++)
+                sum += histData[j];
+            hist[i] = static_cast<float>(sum / (end - begin));
+            break;
+        }
+        }
+    }
+
+    //----------------------------------------
+    // Log Scale
+    //----------------------------------------
+    cv::Mat histMat(dstBins, 1, CV_32F);
+
+    for (int i = 0; i < dstBins; i++)
+        histMat.at<float>(i) = hist[i];
+
+    double maxValue;
+    cv::minMaxLoc(hist, nullptr, &maxValue);
+
+    if (cfg.logScale)
+        cv::log(histMat + 1.0f, histMat);
+
+    //----------------------------------------
+    // Normalize
+    //----------------------------------------
+    cv::normalize(histMat,
+        histMat,
+        0,
+        cfg.histH - 20,
+        cv::NORM_MINMAX);
+
+    //----------------------------------------
+    // Canvas
+    //----------------------------------------
+    cv::Mat canvas(cfg.histH,
+        cfg.histW,
+        CV_8UC3,
+        cfg.bgColor);
+
+    int binW = std::max(1, cfg.histW / dstBins);
+
+    for (int i = 0; i < dstBins; i++)
+    {
+        int barH = static_cast<int>(histMat.at<float>(i));
+
+        cv::rectangle(
+            canvas,
+            cv::Point(i * binW, cfg.histH - barH),
+            cv::Point((i + 1) * binW - 1, cfg.histH - 1),
+            cfg.barColor,
+            cv::FILLED);
+    }
+
+    //----------------------------------------
+    // Axis
+    //----------------------------------------
+    cv::line(canvas,
+        cv::Point(0, cfg.histH - 1),
+        cv::Point(cfg.histW - 1, cfg.histH - 1),
+        cfg.axisColor);
+
+    cv::line(canvas,
+        cv::Point(0, 0),
+        cv::Point(0, cfg.histH - 1),
+        cfg.axisColor);
+
+    //----------------------------------------
+    // X Tick
+    //----------------------------------------
+    const int tickCount = 4;
+
+    for (int i = 0; i <= tickCount; i++)
+    {
+        int x = i * (cfg.histW - 1) / tickCount;
+
+        int value =
+            static_cast<int>(
+                i * (srcBins - 1) / static_cast<double>(tickCount));
+
+        cv::line(canvas,
+            cv::Point(x, cfg.histH - 1),
+            cv::Point(x, cfg.histH - 5),
+            cfg.axisColor);
+
+        cv::putText(canvas,
+            std::to_string(value),
+            cv::Point(x + 2, cfg.histH - 6),
+            cv::FONT_HERSHEY_PLAIN,
+            0.8,
+            cfg.axisColor);
+    }
+
+    //----------------------------------------
+    // Info
+    //----------------------------------------
+    std::string title =
+        "Histogram (" + std::to_string(srcBins) + " bins)";
+
+    if (cfg.logScale)
+        title += " Log";
+
+	title += " Max: " + std::to_string(cv::saturate_cast<int>(maxValue));
+
+    cv::putText(canvas,
+        title,
+        cv::Point(10, 15),
+        cv::FONT_HERSHEY_PLAIN,
+        1.0,
+        cfg.axisColor);
+
+    imwrite_mdy_private(canvas, "histogram");
     cv::imshow(cfg.winName, canvas);
     cv::waitKey(1);
 
@@ -540,9 +707,14 @@ int plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double
         }
     }
 
-    double avg_pixels_per_bin = static_cast<double>(src.rows * src.cols) / static_cast<double>(HIST_SIZE);
-    int Tp = static_cast<int>(avg_pixels_per_bin * plateauRatio);
-    Tp = std::max(1, Tp);
+    show_Histogram_from_vector(hist);
+
+    const int totalPixels = src.rows * src.cols;
+
+    int Tp = static_cast<int>(plateauRatio * totalPixels / HIST_SIZE);
+    Tp = std::max(Tp, 1);
+
+	std::cout << "PHE Tp = " << Tp << std::endl;
 
     std::vector<int> clipped_hist(HIST_SIZE);
     for (int i = 0; i < HIST_SIZE; ++i)
@@ -571,6 +743,13 @@ int plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double
         }
     }
 
+    {
+        std::vector<int>clip_test(clipped_hist.size(), 0);
+        std::transform(clipped_hist.begin(), clipped_hist.end(), clip_test.begin(),
+            [&](int val) { return val * totalPixels / total_clipped_pixels; });
+		show_Histogram_from_vector(clip_test);
+    }
+
 	cv::Mat dst = cv::Mat::zeros(src.size(), CV_8UC1);
     for (int r = 0; r < src.rows; ++r)
     {
@@ -585,6 +764,191 @@ int plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double
     }
 
     output.assign(dst);
+    return 0;
+}
+
+int improve_plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double plateauRatio, int minDynamicRange)
+{
+    const cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    constexpr int HIST_SIZE = 16384;
+
+    std::vector<int> hist(HIST_SIZE, 0);
+
+    for (int r = 0; r < src.rows; r++)
+    {
+        const ushort* ptr = src.ptr<ushort>(r);
+        for (int c = 0; c < src.cols; c++)
+        {
+            ushort v = ptr[c];
+            if (v >= HIST_SIZE)
+                v = HIST_SIZE - 1;
+
+            hist[v]++;
+        }
+    }
+
+    int min_index = 0;
+	int max_index = HIST_SIZE - 1;
+    for (int i = 0; i < HIST_SIZE; i++)
+    {
+        if (hist[i] != 0)
+        {
+            min_index = i;
+            break;
+        }
+    }
+    for (int i = HIST_SIZE - 1; i >= 0; i--)
+    {
+        if (hist[i] != 0)
+        {
+            max_index = i;
+            break;
+        }
+    }
+	int dynamic_range = max_index - min_index + 1;
+
+    if (dynamic_range < minDynamicRange)
+    {
+        int center = (min_index + max_index) >> 1;
+        int left = center - cv::saturate_cast<int>(((cv::saturate_cast<double>(center) + 3000.0) / (8192.0 + 3000.0)) * minDynamicRange);
+        int right = left + minDynamicRange - 1;
+
+        // 边界处理
+        if (left < 0)
+        {
+            left = 0;
+            right = minDynamicRange - 1;
+        }
+
+        if (right >= HIST_SIZE)
+        {
+            right = HIST_SIZE - 1;
+            left = HIST_SIZE - minDynamicRange;
+        }
+		min_index = left;
+		max_index = right;
+        dynamic_range = minDynamicRange;
+    }
+	std::cout << "PHE test min_index = " << min_index << ", max_index = " << max_index << ", dynamic_range = " << dynamic_range << std::endl;
+
+    const int totalPixels = src.rows * src.cols;
+
+    int Tp = static_cast<int>(plateauRatio * totalPixels / HIST_SIZE);
+    Tp = std::max(Tp, 1);
+
+    std::cout << "PHE test Tp = " << Tp << std::endl;
+
+    std::vector<int> clipHist = hist;
+
+    int extraPixels = 0;
+
+    for (int i = 0; i < HIST_SIZE; i++)
+    {
+        if (clipHist[i] > Tp)
+        {
+            extraPixels += clipHist[i] - Tp;
+            clipHist[i] = Tp;
+        }
+    }
+
+    int add = extraPixels / dynamic_range;
+    int remain = extraPixels - dynamic_range * add;
+
+    for (int i = min_index; i <= max_index; i++)
+    {
+        clipHist[i] += add;
+    }
+
+    /*if (remain != 0)
+    {
+		int residualStep = std::max(dynamic_range / remain, 1);
+		for (int i = min_index; i <= max_index && remain > 0; i += residualStep, remain--)
+		{
+			clipHist[i]++;
+		}
+    }*/
+    if (remain > 1)
+    {
+        int half = remain >> 1;
+
+        // 左侧分配
+        for (int i = 0; i < half; i++)
+        {
+            int index = min_index + i;
+
+            if (index <= max_index)
+                clipHist[index]++;
+        }
+
+
+        // 右侧分配
+        for (int i = 0; i < half; i++)
+        {
+            int index = max_index - i;
+
+            if (index >= min_index)
+                clipHist[index]++;
+        }
+    }
+
+	show_Histogram_from_vector(clipHist);
+
+    std::vector<int> cdf(HIST_SIZE, 0);
+
+    cdf[0] = clipHist[0];
+    for (int i = 1; i < HIST_SIZE; i++)
+    {
+        cdf[i] = cdf[i - 1] + clipHist[i];
+    }
+
+    int cdf_min = 0;
+    for (int i = 0; i < HIST_SIZE; i++)
+    {
+        if (cdf[i] != 0)
+        {
+            cdf_min = cdf[i];
+            break;
+        }
+    }
+
+    std::vector<uchar> lut(HIST_SIZE, 0);
+
+    for (int i = 0; i < HIST_SIZE; i++)
+    {
+        if (cdf[i] <= cdf_min)
+        {
+            lut[i] = 0;
+        }
+        else
+        {
+            double value = double(cdf[i] - cdf_min) / double(totalPixels - cdf_min);
+
+            lut[i] = cv::saturate_cast<uchar>(std::round(value * 255.0));
+        }
+    }
+
+    cv::Mat dst(src.size(), CV_8UC1);
+
+    for (int r = 0; r < src.rows; r++)
+    {
+        const ushort* sp = src.ptr<ushort>(r);
+        uchar* dp = dst.ptr<uchar>(r);
+
+        for (int c = 0; c < src.cols; c++)
+        {
+            ushort v = sp[c];
+
+            if (v >= HIST_SIZE)
+                v = HIST_SIZE - 1;
+
+            dp[c] = lut[v];
+        }
+    }
+
+    output.assign(dst);
+
     return 0;
 }
 

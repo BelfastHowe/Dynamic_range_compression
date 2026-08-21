@@ -947,7 +947,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
     cv::minMaxLoc(img_norm, &minVal, &maxVal);
     auto dynamicRange = maxVal - minVal;
 
-    std::cout << "Min: " << minVal << ", Max: " << maxVal << std::endl;
+    std::cout << "Min: " << minVal << ", Max: " << maxVal << ", Range: " << dynamicRange << std::endl;
 
     //percentile_truncation_32F(img_norm, img_norm, cfg.lowPct, cfg.highPct);
 
@@ -979,7 +979,16 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 		max_ratio = de_max / (base_max - base_min);
 		std::cout << "Detail to Base Ratio: " << min_ratio << "-" << max_ratio << std::endl;
 		double abs_max_de = std::max(std::abs(de_min), std::abs(de_max));
-		clip_ratio = cfg.detailClip * (base_max - base_min) / abs_max_de;
+
+        if (abs_max_de != 0)
+        {
+            clip_ratio = cfg.detailClip * (base_max - base_min) / abs_max_de;
+        }
+        else
+        {
+            clip_ratio = 0.0;
+        }
+		
     }
 
     cv::Mat detailClipped;
@@ -997,6 +1006,21 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 	//cv::equalizeHist(dst, dst);
 	reconstructed.convertTo(reconstructed, CV_16U);
     plateauHE_14bit_to_8bit(reconstructed, dst, 2.0);
+    imwrite_mdy_private(dst, "目标PHE");
+
+    cv::Mat dst_2;
+    improve_plateauHE_14bit_to_8bit(reconstructed, dst_2, 128.0, 100);
+	imwrite_mdy_private(dst_2, "测试中的PHE");
+
+    std::array<uchar, 256> gamma_lut{};
+    for (int i = 0; i < 256; i++)
+    {
+        gamma_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 1.5) * 255.0));
+    }
+    cv::Mat gamma_lut_mat(1, 256, CV_8UC1, gamma_lut.data());
+    cv::Mat gamma_result;
+    cv::LUT(dst_2, gamma_lut_mat, gamma_result);
+    imwrite_mdy_private(gamma_result, "DDE_gamma");
 
     output.assign(dst);
 
@@ -1015,9 +1039,10 @@ int test_DDE_improve()
 		bird_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 0.75) * 255.0));
 	}
 
-    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/self_png";
-	//fs::path inputDir(self_png);
-    fs::path inputDir(NOISE_IMAGE_DIR);
+    //std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/30度黑体2";
+    std::string self_png = "C:/Users/Belfast/Desktop/DDE";
+	fs::path inputDir(self_png);
+    //fs::path inputDir(NOISE_IMAGE_DIR);
     //fs::path inputDir(IMAGE_DIR);
 
     if (!fs::exists(inputDir))
@@ -1067,8 +1092,8 @@ int test_DDE_improve()
         cv::LUT(dst_DDE, jungle_lut_mat, jungle_result);
         cv::LUT(dst_DDE, bird_lut_mat, bird_result);
 
-		imwrite_mdy_private(jungle_result, "DDE_jungle");
-		imwrite_mdy_private(bird_result, "DDE_bird");
+		//imwrite_mdy_private(jungle_result, "DDE_jungle");
+		//imwrite_mdy_private(bird_result, "DDE_bird");
     }
 
     return 0;

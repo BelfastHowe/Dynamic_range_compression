@@ -17,7 +17,8 @@ add_executable (Dynamic_range_compression
 "DDE_improvement.h"
 "guided_filter.cpp" 
 "guided_filter.h"
-)
+"slider_display.cpp" 
+"slider_display.h")
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET Dynamic_range_compression PROPERTY CXX_STANDARD 20)

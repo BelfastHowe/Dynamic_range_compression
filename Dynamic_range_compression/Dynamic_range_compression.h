@@ -28,6 +28,8 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
 
 int plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double plateauRatio = 1.5);
 
+int improve_plateauHE_14bit_to_8bit(cv::InputArray input, cv::OutputArray output, double plateauRatio = 2.0, int minDynamicRange = 400);
+
 // 线性映射函数，将输入图像的像素值线性映射到0-255范围，输入为单通道16位图像，输出为单通道8位图像
 int linear_mapping(cv::InputArray input, cv::OutputArray output);
 
@@ -58,6 +60,17 @@ struct HistDisplayConfig
 };
 
 int showHistogram(cv::InputArray input, const HistDisplayConfig& cfg = {});
+
+enum class HistCompressMode
+{
+    MAX,
+    SUM,
+    MEAN
+};
+
+int show_Histogram_from_vector(const std::vector<int>& histData,
+    const HistDisplayConfig& cfg = {},
+    HistCompressMode mode = HistCompressMode::SUM);
 
 
 
