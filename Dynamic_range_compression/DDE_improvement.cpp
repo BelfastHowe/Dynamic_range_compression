@@ -891,7 +891,7 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
     cv::Mat score_med;
 	//cv::medianBlur(score_dn, score_med, 3);
 	score_med = score_dn.clone();
-	imwrite_mdy_private_normalization_8u(score_med, "dn_Score_Median");
+	//imwrite_mdy_private_normalization_8u(score_med, "dn_Score_Median");
 
     //cv::Mat coherenceScore;
     //calc_GradientCoherence(gradMag, coherenceScore, 1);
@@ -900,7 +900,7 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
 
     cv::Mat gainMap;
     //apply_AsymmetricSigmoidGain(ampScore, gainMap, baseGain);
-    cv::GaussianBlur(score_med, gainMap, cv::Size(0, 0), 5);
+    cv::GaussianBlur(score_med, gainMap, cv::Size(9, 9), 2);
 	cv::normalize(gainMap, gainMap, 0.0, baseGain, cv::NORM_MINMAX);
     imwrite_mdy_private_normalization_8u(gainMap, "GainMap");
 
@@ -957,6 +957,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     cv::Mat detailLayer = img_norm - baseLayer;
     cv::GaussianBlur(detailLayer, detailLayer, cv::Size(5, 5), 1.0);
+    imwrite_mdy_private_normalization_8u(src, "src");
     imwrite_mdy_private_normalization_8u(detailLayer, "Guided_DetailLayer");
     imwrite_mdy_private_normalization_8u(baseLayer, "Guided_BaseLayer");
 
@@ -998,33 +999,61 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     cv::Mat reconstructed = baseCompressed + detailClipped;
 
-    //percentile_truncation_32F(reconstructed, reconstructed, cfg.lowPct, cfg.highPct);
+	cv::Mat percentile_mat;
+    percentile_truncation_32F(reconstructed, percentile_mat, cfg.lowPct, cfg.highPct);
 
-    cv::Mat dst;
-    //cv::normalize(reconstructed, dst, 0, 255, cv::NORM_MINMAX, CV_8U);
+    cv::Mat dst_percent;
+    cv::normalize(percentile_mat, dst_percent, 0, 255, cv::NORM_MINMAX, CV_8U);
     //percentile_mapping(dst, dst, cfg.lowPct, cfg.highPct);
 	//cv::equalizeHist(dst, dst);
-	reconstructed.convertTo(reconstructed, CV_16U);
-    plateauHE_14bit_to_8bit(reconstructed, dst, 2.0);
-    imwrite_mdy_private(dst, "目标PHE");
+	//reconstructed.convertTo(reconstructed, CV_16U);
+    //imwrite_mdy_private_normalization_8u(reconstructed, "reconstructed");
+    //plateauHE_14bit_to_8bit(reconstructed, dst, 2.0);
+    imwrite_mdy_private(dst_percent, "截断PHE");
 
-    cv::Mat dst_2;
-    improve_plateauHE_14bit_to_8bit(reconstructed, dst_2, 128.0, 100);
-	imwrite_mdy_private(dst_2, "测试中的PHE");
+    cv::Mat dst_phe;
+    reconstructed.convertTo(dst_phe, CV_16U);
+    improve_plateauHE_14bit_to_8bit(dst_phe, dst_phe, 12.0, 100);
+	imwrite_mdy_private(dst_phe, "测试中的PHE");
 
     std::array<uchar, 256> gamma_lut{};
     for (int i = 0; i < 256; i++)
     {
-        gamma_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 1.5) * 255.0));
+        gamma_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 1.2) * 255.0));
     }
     cv::Mat gamma_lut_mat(1, 256, CV_8UC1, gamma_lut.data());
     cv::Mat gamma_result;
-    cv::LUT(dst_2, gamma_lut_mat, gamma_result);
-    imwrite_mdy_private(gamma_result, "DDE_gamma");
+    //cv::LUT(dst_2, gamma_lut_mat, gamma_result);
+    //imwrite_mdy_private(gamma_result, "DDE_gamma");
 
-    output.assign(dst);
+    output.assign(dst_percent);
 
     return 0;
+}
+
+int test_phe(cv::InputArray input, cv::OutputArray output)
+{
+    cv::Mat src = input.getMat();
+    CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    cv::Mat img_norm;
+    src.convertTo(img_norm, CV_32F);
+    //imwrite_mdy_private_normalization_8u(img_norm, "src");
+
+    cv::Mat baseLayer;
+    cv::bilateralFilter(img_norm, baseLayer,
+        7,
+        30,
+        10);
+
+    baseLayer.convertTo(baseLayer, CV_16U);
+
+    
+    cv::Mat dst;
+    improve_plateauHE_14bit_to_8bit(baseLayer, dst, 12.0, 100);
+    //imwrite_mdy_private(dst, "目标PHE");
+
+    output.assign(dst);
 }
 
 
@@ -1039,10 +1068,10 @@ int test_DDE_improve()
 		bird_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 0.75) * 255.0));
 	}
 
-    //std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/30度黑体2";
-    std::string self_png = "C:/Users/Belfast/Desktop/DDE";
-	fs::path inputDir(self_png);
-    //fs::path inputDir(NOISE_IMAGE_DIR);
+    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/2026-09-24_11-17-28";
+    //std::string self_png = "C:/Users/Belfast/Desktop/DDE";
+	//fs::path inputDir(self_png);
+    fs::path inputDir(NOISE_IMAGE_DIR);
     //fs::path inputDir(IMAGE_DIR);
 
     if (!fs::exists(inputDir))
@@ -1078,11 +1107,14 @@ int test_DDE_improve()
     for (int i = 0; i < images.size(); ++i)
     {
         cv::Mat dst_DDE;
+        cv::Mat dst_phe;
         //dde_denoise(images[i], dst_DDE, nuc);
         //dde_canny(images[i], dst_DDE);
         //dde_gradient(images[i], dst_DDE);
         dde_guided(images[i], dst_DDE);
+		test_phe(images[i], dst_phe);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
+		imwrite_mdy_private(dst_phe, "DDE_phe");
 
         cv::Mat jungle_lut_mat(1, 256, CV_8UC1, jungle_lut.data());
         cv::Mat bird_lut_mat(1, 256, CV_8UC1, bird_lut.data());

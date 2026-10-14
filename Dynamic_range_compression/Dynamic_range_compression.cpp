@@ -217,8 +217,9 @@ int multi_scale_retinex(cv::InputArray input, cv::OutputArray output, const std:
 
 int rgb2png()
 {
-    //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-03-02_15-46-24";
-    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/30度黑体2";
+    std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/2026-09-24_11-17-28";
+    //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/30度黑体2";
+    //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/人体/2026-09-04_17-46-55";
     std::string outputDir = "C:/Users/Belfast/Desktop/result";
     //std::string inputDir = "C:/Users/13012/RunboIR_Archive/2026-07-06_16-54-24";
     //std::string outputDir = "C:/Users/13012/Desktop/result";
