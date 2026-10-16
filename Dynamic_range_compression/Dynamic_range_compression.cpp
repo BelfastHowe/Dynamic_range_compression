@@ -1277,8 +1277,13 @@ int ir_pipeline_cv(cv::InputArray input,
     cv::Mat src_32f;
     src.convertTo(src_32f, CV_32F);
 
+    //估计噪声标准差
+    auto noise_SD = estimateNoiseWaveletMAD(src_32f);
+	std::cout << "Estimated noise SD: " << noise_SD << std::endl;
+
     cv::Mat dn_32f;
-    cv::bilateralFilter(src_32f, dn_32f, 7, sigma_color, sigma_space);
+    cv::bilateralFilter(src_32f, dn_32f, 7, 10, sigma_space);
+    //dn_32f = src_32f.clone();
 
 	double minVal, maxVal;
 	cv::minMaxLoc(src_32f, &minVal, &maxVal);
@@ -1324,6 +1329,8 @@ int ir_pipeline_cv(cv::InputArray input,
     clip_32f = cv::max(clip_32f, cv::saturate_cast<float>(thr_low));
     clip_32f = cv::min(clip_32f, cv::saturate_cast<float>(thr_high));
 
+    imwrite_mdy_private_normalization_8u(clip_32f, "IR_clip");
+
     // ── laplacian锐化 ───────────────
     cv::Mat laplacian;
     cv::Laplacian(clip_32f, laplacian, CV_32F);
@@ -1347,7 +1354,8 @@ int ir_pipeline_cv(cv::InputArray input,
 
 int Test_single_method()
 {
-    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/self_png";
+    //std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/self_png";
+    std::string self_png = "C:/Users/13012/Desktop/640";
     fs::path inputDir(self_png);
 
     //fs::path inputDir(IMAGE_DIR);
@@ -1380,7 +1388,7 @@ int Test_single_method()
 
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
-        cv::subtract(16383, src, src); 
+        //cv::subtract(16383, src, src); 
 
         /*cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
@@ -1417,8 +1425,8 @@ int Test_single_method()
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
 		cv::Mat dst_ir_pipeline;
-		ir_pipeline_cv(src, dst_ir_pipeline, 10, 60, 0.5f, 2.0f, 0.5f);
-		imwrite_mdy_private(dst_ir_pipeline, "IR_Pipeline");
+		ir_pipeline_cv(src, dst_ir_pipeline, 10, 30, 0.5f, 2.0f, 0.5f);
+		imwrite_mdy_private(dst_ir_pipeline, "IR_Pipeline_result");
 
 
         entropy += calcEntropy(dst_ir_pipeline);
@@ -1662,7 +1670,7 @@ int mean_2sigma_from_folder()
 int main()
 {
     //Test_all_methods();
-    //Test_single_method();
+    Test_single_method();
 
     //benchmark_main();
 
@@ -1670,7 +1678,7 @@ int main()
     //rgb2png();
     //mean_2sigma_from_folder();
 
-    DDE_improvement();
+    //DDE_improvement();
 
     return 0;
 }
