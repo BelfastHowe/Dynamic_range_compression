@@ -73,5 +73,7 @@ int show_Histogram_from_vector(const std::vector<int>& histData,
     HistCompressMode mode = HistCompressMode::SUM);
 
 
+void ours_dpc(cv::Mat img, bool dpc_en, cv::Mat img_dpc, double dp_slope = 2, double dp_thresh = 200, int diff_th = 500, int DEAD[][2] = nullptr, int dead_count = 0);
+
 
 // TODO: 在此处引用程序需要的其他标头。

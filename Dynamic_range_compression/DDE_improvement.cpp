@@ -885,7 +885,7 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
     //imwrite_mdy_private_normalization_8u(ampScore, "Gradient_Amplitude_Score");
 
     cv::Mat score_dn;
-	cv::threshold(gradMag_dn, score_dn, 120.0, 3.0, cv::THRESH_BINARY);
+	cv::threshold(gradMag_dn, score_dn, 90.0, 3.0, cv::THRESH_BINARY);
 	imwrite_mdy_private_normalization_8u(score_dn, "Denoised_Score");
 
     cv::Mat score_med;
@@ -900,7 +900,8 @@ int DDE_adaptive_gain_guided_grad(cv::InputArray input, cv::OutputArray output, 
 
     cv::Mat gainMap;
     //apply_AsymmetricSigmoidGain(ampScore, gainMap, baseGain);
-    cv::GaussianBlur(score_med, gainMap, cv::Size(9, 9), 2);
+    //cv::GaussianBlur(score_med, gainMap, cv::Size(9, 9), 2);
+    cv::GaussianBlur(score_med, gainMap, cv::Size(0, 0), 5);
 	cv::normalize(gainMap, gainMap, 0.0, baseGain, cv::NORM_MINMAX);
     imwrite_mdy_private_normalization_8u(gainMap, "GainMap");
 
@@ -922,7 +923,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
         // 细节增强
         double detailGain = 15.0;    // 细节增益系数
-        double detailClip = 0.2;    // 细节层截断，防止过增强（归一化）
+        double detailClip = 0.20;    // 细节层截断，防止过增强（归一化）
 
         // 基础层压缩
         double baseGamma = 0.5;    // gamma < 1 压缩亮区，提升暗区
@@ -934,10 +935,12 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     DDEConfig cfg;
     cfg.baseGamma = 1.0;//先不做基础层gamma
-    cfg.eps = 500;
+    cfg.eps = 200;
 
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
+
+    ours_dpc(src, 1, src);
 
     // Step 1:
     cv::Mat img_norm;
@@ -1000,6 +1003,8 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
     cv::Mat reconstructed = baseCompressed + detailClipped;
 
 	cv::Mat percentile_mat;
+	cfg.lowPct = 2.0;
+	cfg.highPct = 99.0;
     percentile_truncation_32F(reconstructed, percentile_mat, cfg.lowPct, cfg.highPct);
 
     cv::Mat dst_percent;
@@ -1013,7 +1018,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
 
     cv::Mat dst_phe;
     reconstructed.convertTo(dst_phe, CV_16U);
-    improve_plateauHE_14bit_to_8bit(dst_phe, dst_phe, 12.0, 100);
+    improve_plateauHE_14bit_to_8bit(dst_phe, dst_phe, 15.0, 100);
 	imwrite_mdy_private(dst_phe, "测试中的PHE");
 
     std::array<uchar, 256> gamma_lut{};
@@ -1068,10 +1073,11 @@ int test_DDE_improve()
 		bird_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(i / 255.0, 0.75) * 255.0));
 	}
 
-    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/2026-09-24_11-17-28";
+    //std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/2026-09-24_11-17-28";
+    std::string self_png = "C:/Users/Belfast/Desktop/640";
     //std::string self_png = "C:/Users/Belfast/Desktop/DDE";
-	//fs::path inputDir(self_png);
-    fs::path inputDir(NOISE_IMAGE_DIR);
+	fs::path inputDir(self_png);
+    //fs::path inputDir(NOISE_IMAGE_DIR);
     //fs::path inputDir(IMAGE_DIR);
 
     if (!fs::exists(inputDir))
@@ -1096,7 +1102,7 @@ int test_DDE_improve()
 
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
-        cv::subtract(16383, src, src);
+        //cv::subtract(16383, src, src);
 
         images.push_back(src);
     }
@@ -1112,9 +1118,9 @@ int test_DDE_improve()
         //dde_canny(images[i], dst_DDE);
         //dde_gradient(images[i], dst_DDE);
         dde_guided(images[i], dst_DDE);
-		test_phe(images[i], dst_phe);
+		//test_phe(images[i], dst_phe);
         imwrite_mdy_private(dst_DDE, "DDE_origin");
-		imwrite_mdy_private(dst_phe, "DDE_phe");
+		//imwrite_mdy_private(dst_phe, "DDE_phe");
 
         cv::Mat jungle_lut_mat(1, 256, CV_8UC1, jungle_lut.data());
         cv::Mat bird_lut_mat(1, 256, CV_8UC1, bird_lut.data());
