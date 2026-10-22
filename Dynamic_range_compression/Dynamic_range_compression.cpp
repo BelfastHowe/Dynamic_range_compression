@@ -127,6 +127,75 @@ int processRawFile(const std::string& inputPath, const std::string& outputPath)
     return 0;
 }
 
+int processYuvFile(const std::string& inputPath, const std::string& outputPath)
+{
+    // 图像参数
+    const int width = 640;
+    const int height = 512;
+	const size_t imageSize = static_cast<size_t>(width) * height * sizeof(uint16_t);
+
+    // 读取.yuv文件
+    std::ifstream file(inputPath, std::ios::binary);
+    if (!file) {
+        std::cerr << "无法打开文件: " << inputPath << std::endl;
+        return -1;
+    }
+
+    // 读取文件内容
+    std::vector<char> buffer(imageSize);
+    file.read(buffer.data(), imageSize);
+
+    // 检查图像数据是否有效
+	if (static_cast<size_t>(file.gcount()) != imageSize)
+    {
+		std::cerr << "读取的图像数据大小不正确: " << inputPath << std::endl;
+		return -1;
+	}
+
+    file.close();
+
+    // 转换为16uc1图像数据
+    cv::Mat image(height, width, CV_8UC2, buffer.data());
+
+    cv::Mat result(height, width, CV_16UC1);
+
+    // 遍历每个像素
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            // 获取RGB值
+            cv::Vec2b pixel = image.at<cv::Vec2b>(y, x);
+            uint8_t g = pixel[0];
+            uint8_t b = pixel[1];
+
+            // 按RGB顺序从高位到低位拼接
+            uint32_t combined = ((uint32_t)g << 8) | b;
+
+            // 取低16位
+            uint16_t value = combined & 0xFFFF;
+
+            // 存储结果
+            result.at<uint16_t>(y, x) = value;
+        }
+    }
+
+    double minVal, maxVal;
+    cv::Point minLoc, maxLoc;
+    cv::minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
+
+    std::cout << "最小值: " << minVal << " 位置: " << minLoc << std::endl;
+    std::cout << "最大值: " << maxVal << " 位置: " << maxLoc << std::endl;
+
+    // 保存为PNG文件
+    if (!cv::imwrite(outputPath, result)) {
+        std::cerr << "无法保存图像: " << outputPath << std::endl;
+        return -1;
+    }
+
+    std::cout << "成功转换并保存: " << inputPath << " -> " << outputPath << std::endl;
+
+    return 0;
+}
+
 // 单尺度Retinex算法实现
 int single_scale_retinex(cv::InputArray input, cv::OutputArray output, double sigma)
 {
@@ -239,6 +308,36 @@ int rgb2png()
 
             // 处理单个文件
             processRawFile(inputPath, outputPath);
+        }
+    }
+
+    return 0;
+}
+
+int yuv2png()
+{
+    std::string inputDir = "C:\\Users\\13012\\Desktop\\640-1021\\uvc_红外摄像头 1_20261021_163105_927_9ee13f70";
+    //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/30度黑体2";
+    //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/人体/2026-09-04_17-46-55";
+    //std::string outputDir = "C:/Users/Belfast/Desktop/result";
+    //std::string inputDir = "C:/Users/13012/RunboIR_Archive/2026-07-06_16-54-24";
+    std::string outputDir = "C:/Users/13012/Desktop/result";
+
+    if (!fs::exists(outputDir)) {
+        fs::create_directory(outputDir);
+    }
+
+    // 遍历输入目录中的所有.raw和.rgb文件
+    for (const auto& entry : fs::directory_iterator(inputDir)) {
+        if ((entry.path().extension() == ".raw") || (entry.path().extension() == ".yuv")) {
+            // 构造输出文件路径
+            std::string inputPath = entry.path().string();
+            std::string fileName = entry.path().stem().string(); // 获取不带扩展名的文件名
+
+            std::string outputPath = outputDir + "/" + fileName + ".png";
+
+            // 处理单个文件
+            processYuvFile(inputPath, outputPath);
         }
     }
 
@@ -1479,8 +1578,13 @@ int ir_pipeline_cv(cv::InputArray input,
     cv::Mat src_32f;
     src.convertTo(src_32f, CV_32F);
 
+    //估计噪声标准差
+    auto noise_SD = estimateNoiseWaveletMAD(src_32f);
+	std::cout << "Estimated noise SD: " << noise_SD << std::endl;
+
     cv::Mat dn_32f;
-    cv::bilateralFilter(src_32f, dn_32f, 7, sigma_color, sigma_space);
+    cv::bilateralFilter(src_32f, dn_32f, 7, 10, sigma_space);
+    //dn_32f = src_32f.clone();
 
 	double minVal, maxVal;
 	cv::minMaxLoc(src_32f, &minVal, &maxVal);
@@ -1526,6 +1630,8 @@ int ir_pipeline_cv(cv::InputArray input,
     clip_32f = cv::max(clip_32f, cv::saturate_cast<float>(thr_low));
     clip_32f = cv::min(clip_32f, cv::saturate_cast<float>(thr_high));
 
+    imwrite_mdy_private_normalization_8u(clip_32f, "IR_clip");
+
     // ── laplacian锐化 ───────────────
     cv::Mat laplacian;
     cv::Laplacian(clip_32f, laplacian, CV_32F);
@@ -1550,7 +1656,9 @@ int ir_pipeline_cv(cv::InputArray input,
 int Test_single_method()
 {
     //std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/self_png";
+    //std::string self_png = "C:/Users/13012/Desktop/640";
     std::string self_png = "C:/Users/Belfast/Desktop/640";
+
     fs::path inputDir(self_png);
 
     //fs::path inputDir(IMAGE_DIR);
@@ -1620,7 +1728,7 @@ int Test_single_method()
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
 		cv::Mat dst_ir_pipeline;
-		ir_pipeline_cv(src, dst_ir_pipeline, 10, 10, 2.0f, 1.0f, 0.5f);
+		ir_pipeline_cv(src, dst_ir_pipeline, 10, 60, 0.5f, 2.0f, 0.5f);
 		imwrite_mdy_private(dst_ir_pipeline, "IR_Pipeline");
 
 
@@ -1871,6 +1979,7 @@ int main()
 
     //test_precision_batch_14to8();
     //rgb2png();
+	yuv2png();
     //mean_2sigma_from_folder();
 
     //DDE_improvement();

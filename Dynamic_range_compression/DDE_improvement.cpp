@@ -167,6 +167,36 @@ static double calcMatPercentile(cv::InputArray input, double percentile = 0.50)
     return static_cast<double>(vals[idx]);
 }
 
+// 原地按百分位数进行右侧截断,限位到指定百分位数
+int trimRightPercentileInPlace(std::vector<float>& values, double percentile = 0.99)
+{
+    if (values.empty()) return -1;
+
+    // 1. 确保百分位参数在有效范围内 (0.0 到 1.0 之间)
+    percentile = std::clamp(percentile, 0.0, 1.0);
+
+    // 2. 拷贝一份用于寻找阈值（避免直接改变原数组顺序）
+    std::vector<float> temp = values;
+
+    // 3. 计算目标百分位对应的索引
+    size_t k = static_cast<size_t>(std::floor(percentile * (temp.size() - 1)));
+
+    // 4. 使用 std::nth_element 快速找到第 k 小的数（O(N) 复杂度，非常高效）
+    std::nth_element(temp.begin(), temp.begin() + k, temp.end());
+    float threshold = temp[k];
+
+    // 5. 将原 vector 中所有大于该阈值的元素截断（钳制）为 threshold
+    for (float& v : values)
+    {
+        if (v > threshold)
+        {
+            v = threshold;
+        }
+    }
+
+    return 0;
+}
+
 // 双端抑制权重图
 // lo_thresh: 噪声抑制下界（低于此全压制）
 // hi_thresh: 边缘饱和上界（高于此全压制）
@@ -512,6 +542,10 @@ double estimateNoiseWaveletMAD(cv::InputArray input)
     }
 
     if (hh_coefficients.empty()) return 0.0;
+
+	trimRightPercentileInPlace(hh_coefficients, 0.999);
+
+	showHalfStepHistogram(hh_coefficients);
 
     size_t mid_index = hh_coefficients.size() / 2;
     std::nth_element(hh_coefficients.begin(), hh_coefficients.begin() + mid_index, hh_coefficients.end());
@@ -1074,7 +1108,9 @@ int test_DDE_improve()
 	}
 
     //std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/2026-09-24_11-17-28";
+    //std::string self_png = "C:/Users/13012/Desktop/未知图包1015";
     std::string self_png = "C:/Users/Belfast/Desktop/640";
+    
     //std::string self_png = "C:/Users/Belfast/Desktop/DDE";
 	fs::path inputDir(self_png);
     //fs::path inputDir(NOISE_IMAGE_DIR);
