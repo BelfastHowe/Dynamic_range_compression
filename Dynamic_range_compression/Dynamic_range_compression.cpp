@@ -1728,7 +1728,7 @@ int Test_single_method()
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
 		cv::Mat dst_ir_pipeline;
-		ir_pipeline_cv(src, dst_ir_pipeline, 10, 60, 0.5f, 2.0f, 0.5f);
+		ir_pipeline_cv(src, dst_ir_pipeline, 10, 10, 0.5f, 2.0f, 0.5f);
 		imwrite_mdy_private(dst_ir_pipeline, "IR_Pipeline");
 
 
