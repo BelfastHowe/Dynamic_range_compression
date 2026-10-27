@@ -974,7 +974,7 @@ int dde_guided(cv::InputArray input, cv::OutputArray output)
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-    ours_dpc(src, 1, src);
+    //ours_dpc(src, 1, src);
 
     // Step 1:
     cv::Mat img_norm;

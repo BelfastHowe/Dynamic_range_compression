@@ -1572,23 +1572,23 @@ int ir_pipeline_cv(cv::InputArray input,
     cv::Mat src = input.getMat();
     CV_CheckTypeEQ(src.type(), CV_16UC1, "");
 
-    ours_dpc(src, 1, src);
+    //ours_dpc(src, 1, src);
 
     // ── 双边滤波 ─────────────────────────────
     cv::Mat src_32f;
     src.convertTo(src_32f, CV_32F);
 
     //估计噪声标准差
-    auto noise_SD = estimateNoiseWaveletMAD(src_32f);
-	std::cout << "Estimated noise SD: " << noise_SD << std::endl;
+    //auto noise_SD = estimateNoiseWaveletMAD(src_32f);
+	//std::cout << "Estimated noise SD: " << noise_SD << std::endl;
 
     cv::Mat dn_32f;
-    cv::bilateralFilter(src_32f, dn_32f, 7, 10, sigma_space);
+    cv::bilateralFilter(src_32f, dn_32f, 7, sigma_color, sigma_space);
     //dn_32f = src_32f.clone();
 
 	double minVal, maxVal;
 	cv::minMaxLoc(src_32f, &minVal, &maxVal);
-	std::cout << "base_layer_MinMax: " << minVal << "-" << maxVal << std::endl;
+	std::cout << "src_MinMax: " << minVal << "-" << maxVal << std::endl;
 
 	imwrite_mdy_private_normalization_8u(src, "IR_src");
 	imwrite_mdy_private_normalization_8u(dn_32f, "IR_base");
@@ -1657,7 +1657,8 @@ int Test_single_method()
 {
     //std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/self_png";
     //std::string self_png = "C:/Users/13012/Desktop/640";
-    std::string self_png = "C:/Users/Belfast/Desktop/640";
+    //std::string self_png = "C:/Users/Belfast/Desktop/640";
+    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/60度黑体";
 
     fs::path inputDir(self_png);
 
@@ -1691,7 +1692,7 @@ int Test_single_method()
 
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
-        //cv::subtract(16383, src, src); 
+        cv::subtract(16383, src, src); 
 
         /*cv::Mat dst_linear;
         linear_mapping(src, dst_linear);
@@ -1728,8 +1729,8 @@ int Test_single_method()
         imwrite_mdy_private(dst_SSR, "SSR");*/
 
 		cv::Mat dst_ir_pipeline;
-		ir_pipeline_cv(src, dst_ir_pipeline, 10, 60, 0.5f, 2.0f, 0.5f);
-		imwrite_mdy_private(dst_ir_pipeline, "IR_Pipeline");
+		ir_pipeline_cv(src, dst_ir_pipeline, 10, 30, 0.5f, 2.0f, 0.5f);
+		imwrite_mdy_private(dst_ir_pipeline, "IR_Pipeline_result");
 
 
         entropy += calcEntropy(dst_ir_pipeline);
@@ -1979,7 +1980,7 @@ int main()
 
     //test_precision_batch_14to8();
     //rgb2png();
-	yuv2png();
+	//yuv2png();
     //mean_2sigma_from_folder();
 
     //DDE_improvement();
