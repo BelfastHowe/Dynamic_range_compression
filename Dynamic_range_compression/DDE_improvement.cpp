@@ -1138,7 +1138,7 @@ int test_DDE_improve()
 
         // 处理图像
         CV_CheckTypeEQ(src.type(), CV_16UC1, "");
-        //cv::subtract(16383, src, src);
+        cv::subtract(16383, src, src);
 
         images.push_back(src);
     }

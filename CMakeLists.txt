@@ -11,10 +11,13 @@ if (POLICY CMP0141)
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
-project ("Dynamic_range_compression")
+project ("Dynamic_range_compression_Project")
+
+find_package(OpenCV CONFIG REQUIRED)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 包含子项目。
 add_subdirectory ("Dynamic_range_compression")
 
-target_compile_definitions(${PROJECT_NAME} PRIVATE IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/original_image")
-target_compile_definitions(${PROJECT_NAME} PRIVATE NOISE_IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/noise_image")

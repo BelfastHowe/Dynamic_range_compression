@@ -2,8 +2,7 @@
 # 项目特定的逻辑。
 #
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_subdirectory("cmodel640") 
 
 # 将源代码添加到此项目的可执行文件。
 add_executable (Dynamic_range_compression
@@ -25,5 +24,8 @@ if (CMAKE_VERSION VERSION_GREATER 3.12)
 endif()
 
 # TODO: 如有需要，请添加测试并安装目标。
-find_package(OpenCV CONFIG REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE ${OpenCV_LIBS})
+target_link_libraries(Dynamic_range_compression PRIVATE ${OpenCV_LIBS})
+target_link_libraries(Dynamic_range_compression PRIVATE cmodel640)
+
+target_compile_definitions(Dynamic_range_compression PRIVATE IMAGE_DIR="${CMAKE_SOURCE_DIR}/original_image")
+target_compile_definitions(Dynamic_range_compression PRIVATE NOISE_IMAGE_DIR="${CMAKE_SOURCE_DIR}/noise_image")
