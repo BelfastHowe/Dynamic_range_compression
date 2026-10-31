@@ -54,7 +54,7 @@ int imwrite_private(cv::InputArray input, const std::string file_name)
     return 0;
 }
 
-int cmodel_640_main()
+int cmodel_640_process()
 {
     int height = 512;
     int width = 640;
@@ -186,5 +186,78 @@ int cmodel_640_main()
     return 0;
 }
 
+int fast_gamma()
+{
+    std::string self_png = "G:/_cpp/BelfastHowe/Red_Hot/original_image";
+
+    fs::path inputDir(self_png);
+
+    if (!fs::exists(inputDir))
+    {
+        std::cerr << "Input directory not found: " << self_png << std::endl;
+        return -1;
+    }
+
+    std::array<uchar, 256> jungle_lut{};
+    std::array<uchar, 256> bird_lut{};
+
+    for (int i = 0; i < 256; i++)
+    {
+        jungle_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(static_cast<double>(i) / 255.0, 0.4) * 255.0 + 0.5));
+        bird_lut[i] = cv::saturate_cast<uchar>(std::floor(std::pow(static_cast<double>(i) / 255.0, 0.25) * 255.0 + 0.5));
+    }
+
+    std::vector<cv::Mat> images;
+    for (const auto& entry : fs::directory_iterator(inputDir))
+    {
+        // 过滤 bmp 文件
+        if (!entry.is_regular_file() || entry.path().extension() != ".bmp")
+            continue;
+
+        cv::Mat src = cv::imread(entry.path().string(), cv::IMREAD_COLOR);
+        if (src.empty())
+        {
+            std::cerr << "Failed to read: " << entry.path() << std::endl;
+            continue;
+        }
+
+        cv::Mat grayImage;
+        cv::cvtColor(src, grayImage, cv::COLOR_BGR2GRAY);
+
+        // 处理图像
+        CV_CheckTypeEQ(grayImage.type(), CV_8UC1, "");
+        cv::subtract(255, grayImage, grayImage);
+
+        images.push_back(grayImage);
+    }
+
+
+    for (int i = 0; i < images.size(); ++i)
+    {
+		cv::Mat dst = images[i].clone();
+
+        cv::Mat jungle_lut_mat(1, 256, CV_8UC1, jungle_lut.data());
+        cv::Mat bird_lut_mat(1, 256, CV_8UC1, bird_lut.data());
+
+        cv::Mat jungle_result, bird_result;
+
+        cv::LUT(dst, jungle_lut_mat, jungle_result);
+        cv::LUT(dst, bird_lut_mat, bird_result);
+
+        imwrite_private(dst, "01_dst");
+		imwrite_private(jungle_result, "02_jungle_result");
+		imwrite_private(bird_result, "03_bird_result");
+    }
+
+    return 0;
+}
+
+
+int cmodel_640_main()
+{
+    fast_gamma();
+
+    return 0;
+}
 
 
