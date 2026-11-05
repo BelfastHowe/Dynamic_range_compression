@@ -92,16 +92,16 @@ void applyColorMap1(Image src, Image dst, MapTypes colormap, int gamma_type)
             int th;
             int s;
             if (gamma_type == 0) {
-                th = 73;
-                s = 0;
+                th = 100;
+                s = 30;
             }
             else if (gamma_type == 1) {
-                th = 140;
-                s = 90;
+                th = 170;
+                s = 120;
             }
             else {
-                th = 170;
-                s = 140;
+                th = 200;
+                s = 160;
             }
             if (gray < s) {
                 color[2] = 255;
@@ -184,28 +184,28 @@ void ColorMap(cv::Mat originalImg, cv::Mat outImg, int type, int gamma_type)
     //rgb565(iron);
 
     if (type == 0) {
-        imshow("White Hot", white_hot);
-        imwrite("MAP_WhiteHot.png", white_hot);
+        //imshow("White Hot", white_hot);
+        //imwrite("MAP_WhiteHot.png", white_hot);
         white_hot.copyTo(outImg);
     }
     else if (type == 1) {
-        imshow("Black Hot", black_hot);
-        imwrite("MAP_BlackHot.png", black_hot);
+        //imshow("Black Hot", black_hot);
+        //imwrite("MAP_BlackHot.png", black_hot);
         black_hot.copyTo(outImg);
     }
     else if (type == 2) {
-        imshow("Iron", iron);
-        imwrite("MAP_IronRed.png", iron);
+        //imshow("Iron", iron);
+        //imwrite("MAP_IronRed.png", iron);
         iron.copyTo(outImg);
     }
     else if (type == 3) {
-        imshow("Red Hot", red_hot);
-        imwrite("MAP_RedHot.png", red_hot);
+        //imshow("Red Hot", red_hot);
+        //imwrite("MAP_RedHot.png", red_hot);
         red_hot.copyTo(outImg);
     }
     else {
-        imshow("White Hot", white_hot);
-        imwrite("MAP_WhiteHot.png", white_hot);
+        //imshow("White Hot", white_hot);
+        //imwrite("MAP_WhiteHot.png", white_hot);
         white_hot.copyTo(outImg);
     }
 

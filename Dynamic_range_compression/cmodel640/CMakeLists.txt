@@ -7,7 +7,11 @@ add_library(cmodel640 STATIC
  "dpdc.h"
  "dpdc.cpp"
  "gamma.h"
- "gamma_correction.cpp" "colormap.h" "applycolormap_black.cpp")
+ "gamma_correction.cpp"
+ "colormap.h"
+ "applycolormap_black.cpp"
+ "clip.h"
+ "clip.cpp" "ours_bilateral.h" "ours_bilateral.cpp" "adc.h" "adc.cpp" "isp_sharpen_function.h" "isp_sharpen_function.cpp")
 
 # 暴露头文件路径给主程序
 target_include_directories(cmodel640 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

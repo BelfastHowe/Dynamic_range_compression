@@ -9,6 +9,10 @@
 #include "dpdc.h"
 #include "gamma.h"
 #include "colormap.h"
+#include "clip.h"
+#include "ours_bilateral.h"
+#include "adc.h"
+#include "isp_sharpen_function.h"
 
 
 namespace fs = std::filesystem;
@@ -54,14 +58,33 @@ int imwrite_private(cv::InputArray input, const std::string file_name)
     return 0;
 }
 
+int imwrite_private_normalization_8u(cv::InputArray input, const std::string file_name)
+{
+    cv::Mat src = input.getMat();
+
+    cv::Mat normalized;
+    cv::normalize(src, normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
+
+    return imwrite_private(normalized, file_name);
+}
+
 int cmodel_640_process()
 {
     int height = 512;
     int width = 640;
 
+    int dead_coords[13][2] = {
+        { 420, 5 },{ 437, 5 },{ 393, 114 },{ 410, 114 },
+        { 338, 162 },{ 355, 162 },{ 627, 170 },{ 4, 171 },
+        { 503, 192 },{ 520, 192 },{ 35, 447 },/*{ 11, 456 },*/
+        { 18, 447 }
+    };
+
+	int dead_sum = sizeof(dead_coords) / sizeof(dead_coords[0]);
+
     std::cout << "读取输入图像" << std::endl;
 
-    std::string self_png = "C:/Users/Belfast/Desktop/640";
+    std::string self_png = "C:/Users/Belfast/Desktop/640clip/drc640";
 
     fs::path inputDir(self_png);
     //fs::path inputDir(NOISE_IMAGE_DIR);
@@ -104,38 +127,44 @@ int cmodel_640_process()
         cv::resize(img_in, img_i, targetSize, 0, 0, cv::INTER_LINEAR);
 
         cv::minMaxLoc(img_i, &minVal, &maxVal);
-        std::cout << "img_in minval=" << minVal << " maxVal=" << maxVal << '\n';
+		std::cout << "img_in minval=" << minVal << " maxVal=" << maxVal << std::endl;
 
         //--------------------模拟静态坏点------------------------------------
         //img_in.at<ushort>(1, 10) = 0;img_in.at<ushort>(1, 20) = 0;img_in.at<ushort>(1, 30) = 0;
         int (*DEAD)[2] = nullptr;
         int dead_count = 0;
+
+        DEAD = dead_coords;
+        dead_count = dead_sum;
+
         std::cout << "DEAD POINT " << DEAD << std::endl;
-        imwrite_private(img_in,"cmodel640_src");
+        imwrite_private_normalization_8u(img_in,"cmodel640_src");
+		//imwrite_private_normalization_8u(img_i, "src_resize");
 
         //------------------使能信号-------------------------------
         bool unc_en = 0;
         bool b_change = 0;
         bool k_change = 0;
-        bool lsc_en = 1;
+        bool lsc_en = 0;
         bool dpc_en = 1;
         bool dn_en = 1;
         bool clip_en = 1;
         bool adc_en = 1;
-        bool sp_en = 1;
+        bool sp_en = 0;
 
         int Y_value = 12000;//ooc标定值
         int dpc_thr = 3000;
 
-        double dp_slope = 1;    // 斜率参数    控制检测灵敏度，差值每增加1，检测值增加0.001，举例：差值为1000时，检测值 = 1000×0.001 - 0.3 = 0.7
-        double dp_thresh = 300;   // 阈值参数    设置检测阈值的基础偏移，即使差值为0，检测值也是-0.3（被限制为0）;
-        int dp_diff_th = 1000;           // DPC差值阈值   中心像素与邻域像素差值超过该阈值才考虑为坏点
+        double dp_slope = 6;    // 斜率参数    控制检测灵敏度，差值每增加1，检测值增加0.001，举例：差值为1000时，检测值 = 1000×0.001 - 0.3 = 0.7
+        double dp_thresh = 250;   // 阈值参数    设置检测阈值的基础偏移，即使差值为0，检测值也是-0.3（被限制为0）;
+        int dp_diff_th = 100;           // DPC差值阈值   中心像素与邻域像素差值超过该阈值才考虑为坏点
         int sigma_space = 10;
-        int sigma_color = 30;
-        float low_percent = 0.5;
-        int high_percent = 2;
-        int Thr = 600;
+        int sigma_color = 10;
+        float low_percent = 2.0f;
+        int high_percent = 1.0f;
+        int Thr = 300;
         int delta = 0;
+
         uint8_t A = (1 << 7);
         int temp_kernel[3][3] = {
         { 0,  -16,  0 },
@@ -147,6 +176,7 @@ int cmodel_640_process()
         int gamma_type = 0;
         int colormap_sel = 0;
 
+#if 0
         //获取图像镜头阴影校正校正标定信息！！！
         int16_t** K_lsc = new int16_t * [height];
         for (int i = 0; i < height; i++) {
@@ -174,12 +204,85 @@ int cmodel_640_process()
         write_kb_coe("gain_kb_16bit.coe", K_lsc, B_lsc, height, width);
         cv::Mat img_lsc = cv::Mat::zeros(height, width, CV_16UC1);
         lsc(img_i, K_lsc, B_lsc, img_lsc, lsc_en);
+#endif
+        cv::Mat img_lsc = img_i.clone();
+        imwrite_private_normalization_8u(img_lsc, "lsc");
 
-		imwrite_private(img_lsc, "cmodel640_lsc");
-
+        // dpc
         cv::Mat img_dpc = cv::Mat::zeros(height, width, CV_16UC1);
-
         ours_dpc(img_lsc, dpc_en, img_dpc, dp_slope, dp_thresh, dp_diff_th, DEAD, dead_count);//基于像素差值的动态阈值，斜率参数和阈值参数可调，适应不同场景3*5
+
+        imwrite_private_normalization_8u(img_dpc, "dpc");   
+        cv::minMaxLoc(img_dpc, &minVal, &maxVal);
+        std::cout << "img_dpc minVal=" << minVal << " maxVal=" << maxVal << std::endl;
+
+		// dn
+        cv::Mat img_dn = cv::Mat::zeros(height, width, CV_16UC1);
+        ours_bilateral(img_dpc, img_dn, dn_en, sigma_color, sigma_space);
+
+		imwrite_private_normalization_8u(img_dn, "dn");
+        cv::minMaxLoc(img_dn, &minVal, &maxVal);
+        std::cout << "img_dn minVal=" << minVal << " maxVal=" << maxVal << std::endl;
+
+
+        const int total_pixels = height * width;
+        int low_number = static_cast<int>(total_pixels * low_percent / 100.0f);
+        int high_number = total_pixels -
+            static_cast<int>(total_pixels * high_percent / 100.0f);
+
+        // 处理图像并获取最小像素信息
+        std::vector<cv::Point> min_positions;
+        std::vector<uint16_t> min_values;
+        int autothreshold_low = 0;
+        int autothreshold_high = 16383;
+        std::cout << "clip low_number=" << low_number << " high_number=" << high_number << std::endl;
+
+        // clip
+        cv::Mat img_clip = histogram_equalization_clipped_fixed2(
+            img_dn, min_positions, min_values, clip_en, low_number, high_number,
+            autothreshold_low, autothreshold_high);
+
+        std::cout << "autothreshold_low=" << autothreshold_low
+            << " autothreshold_high=" << autothreshold_high << '\n';
+
+        // 输出14bit图像的最小像素信息
+        std::cout << "14bit图像中像素值最低的16个像素：" << std::endl;
+        std::cout << "值范围: 0-16383 (14bit)" << std::endl;
+        for (size_t i = 0; i < min_positions.size(); ++i) {
+            std::cout << "值: " << min_values[i]
+                << "\t位置: (" << min_positions[i].x
+                << ", " << min_positions[i].y << ")" << std::endl;
+        }
+
+		imwrite_private_normalization_8u(img_clip, "clip");
+        cv::minMaxLoc(img_clip, &minVal, &maxVal);
+        std::cout << "img_clip minVal=" << minVal << " maxVal=" << maxVal << std::endl;
+
+        // adc
+        cv::Mat img2_adc = cv::Mat::zeros(height, width, CV_8UC1);
+        adc(img_clip, img2_adc, adc_en, Thr, delta);
+
+        cv::Mat adc_inversion;
+		cv::subtract(255, img2_adc, adc_inversion);
+		imwrite_private(adc_inversion, "adc");
+
+		// sharpen
+        cv::Mat img2_sp = cv::Mat::zeros(height, width, CV_8UC1);
+        sharpenImage_int8(img2_adc, img2_sp, sp_en, temp_kernel, temp_akt);
+
+        imwrite_private(img2_sp, "sharpen");
+
+		// gamma
+        cv::Mat img_gm = cv::Mat::zeros(height, width, CV_8UC1);
+        gamma(img2_sp, img_gm, gamma_type);
+
+        imwrite_private(img_gm, "gamma");
+
+		// colormap
+        cv::Mat img_color = cv::Mat::zeros(height, width, CV_8UC3);
+        ColorMap(img_gm, img_color, colormap_sel, gamma_type);
+
+		imwrite_private(img_color, "colormap");
 
     }
 
@@ -188,7 +291,7 @@ int cmodel_640_process()
 
 int fast_gamma()
 {
-    std::string self_png = "G:/_cpp/BelfastHowe/Red_Hot/original_image";
+    std::string self_png = "C:/Users/Belfast/Desktop/before_mapping/2026-09-18_17-37-04";
 
     fs::path inputDir(self_png);
 
@@ -255,7 +358,9 @@ int fast_gamma()
 
 int cmodel_640_main()
 {
-    fast_gamma();
+    //fast_gamma();
+
+    cmodel_640_process();
 
     return 0;
 }

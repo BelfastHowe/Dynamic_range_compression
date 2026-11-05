@@ -8,7 +8,7 @@ void build_gamma_lut(unsigned char lut[256], float gamma)
         double normalized = (double)i / 255.0;
         double corrected = pow(normalized, gamma);
         lut[i] = (unsigned char)(corrected * 255.0 + 0.5);
-        printf("lut[%d] <= 8'h%02x;\n", i, lut[i]);
+        //printf("lut[%d] <= 8'h%02x;\n", i, lut[i]);
     }
 }
 
@@ -28,8 +28,8 @@ void GammaMAP(Image_GAMMA src, Image_GAMMA dst, MapTypes_GAMMA gammamap)
     }
     unsigned char lut_brighter[256];
     unsigned char lut_darker[256];
-    build_gamma_lut(lut_brighter, 1 / 2.2f);
-    build_gamma_lut(lut_darker, 2.2f);
+    build_gamma_lut(lut_brighter, 0.4f);
+    build_gamma_lut(lut_darker, 0.25f);
 
     for (int i = 0; i < src.height; ++i)
         for (int j = 0; j < src.width; ++j)

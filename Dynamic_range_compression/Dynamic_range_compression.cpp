@@ -168,7 +168,7 @@ int processYuvFile(const std::string& inputPath, const std::string& outputPath)
             uint8_t b = pixel[1];
 
             // 按RGB顺序从高位到低位拼接
-            uint32_t combined = ((uint32_t)g << 8) | b;
+            uint32_t combined = ((uint32_t)b << 8) | g;
 
             // 取低16位
             uint16_t value = combined & 0xFFFF;
@@ -316,12 +316,12 @@ int rgb2png()
 
 int yuv2png()
 {
-    std::string inputDir = "C:\\Users\\13012\\Desktop\\640-1021\\uvc_红外摄像头 1_20261021_163105_927_9ee13f70";
+    std::string inputDir = "C:/Users/Belfast/Desktop/640clip/drc640";
     //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/30度黑体2";
     //std::string inputDir = "C:/Users/Belfast/Desktop/before_mapping/人体/2026-09-04_17-46-55";
     //std::string outputDir = "C:/Users/Belfast/Desktop/result";
     //std::string inputDir = "C:/Users/13012/RunboIR_Archive/2026-07-06_16-54-24";
-    std::string outputDir = "C:/Users/13012/Desktop/result";
+    std::string outputDir = "C:/Users/Belfast/Desktop/result";
 
     if (!fs::exists(outputDir)) {
         fs::create_directory(outputDir);

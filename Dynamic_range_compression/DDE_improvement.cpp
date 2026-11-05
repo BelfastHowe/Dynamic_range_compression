@@ -436,7 +436,7 @@ int correctFPN_ColMedian(cv::InputArray input, cv::OutputArray output, int smoot
     int rows = src.rows;
     int cols = src.cols;
 
-    // 1. 计算每一列的特征值（使用中值比均值更鲁棒，能避开孤立热源的影响）
+    // 计算每一列的特征值（使用中值比均值更鲁棒，能避开孤立热源的影响）
     cv::Mat colFeatures = cv::Mat::zeros(1, cols, CV_32F);
 
     for (int j = 0; j < cols; ++j)
@@ -452,15 +452,15 @@ int correctFPN_ColMedian(cv::InputArray input, cv::OutputArray output, int smoot
         colFeatures.at<float>(0, j) = colPixels[rows / 2];
     }
 
-    // 2. 对列特征序列进行横向高斯模糊，提取“低频趋势”
+    // 对列特征序列进行横向高斯模糊，提取“低频趋势”
     // 这个趋势代表了场景真实的横向亮度变化，而偏离这个趋势的就是条纹
     cv::Mat colTrend;
     cv::GaussianBlur(colFeatures, colTrend, cv::Size(smoothWin, 1), 0);
 
-    // 3. 计算修正增益 (Correction = 趋势 - 实际)
+    // 计算修正增益 (Correction = 趋势 - 实际)
     cv::Mat correction = colTrend - colFeatures;
 
-    // 4. 将修正应用到每一行
+    // 应用修正
     auto dst = src.clone();
     for (int i = 0; i < rows; ++i)
     {

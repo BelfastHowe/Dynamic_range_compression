@@ -180,12 +180,12 @@ void ours_dpc(cv::Mat img, bool dpc_en, cv::Mat img_dpc, double dp_slope, double
 
                 // 根据判断条件进行校正
                 // 新增：如果邻域所有 signed differences 同号（全部正或全部负），也视为坏点（用中值修正）
-                if (data_r_judge >= 7 && abs(data_r_center - data_r_median) > diff_th/* && all_same_sign*/) {
+                if (is_dead_pixel) {
+                    data_r_correct = data_r_median;
+                }
+                else if (data_r_judge >= 7 && abs(data_r_center - data_r_median) > diff_th/* && all_same_sign*/) {
                     data_r_correct = data_r_median * data_r_weight + (1024 - data_r_weight) * data_r_center;
                     data_r_correct /= 1024;
-                }
-                else if (is_dead_pixel) {
-                    data_r_correct = data_r_median;
                 }
                 else {
                     data_r_correct = data_r_center;
